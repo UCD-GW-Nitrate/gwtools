@@ -208,3 +208,86 @@ npsat.ReadWaterTableCloudPoints <- function(prefix, suffix = 'top', nproc = 1, i
   colnames(df) <- x
   return(df)
 }
+
+
+#' npsat.WriteGridAxis writes a xis object to file
+#'
+#' @param filename is the file name
+#' @param x If the spacing option is CONST then x is a length 3 vector
+#' where the x[1] is the origin x[2] is the distance between ticks and x[3] is the number of ticks
+#' in that axis. If spacing is VAR then x must be a monotonous increasing vector with the ticks.
+#' This is a good option if the ticks are not evenly spaced
+#' @param spacing spacing is either CONST or VAR
+#'
+#' @return just prints a file
+#' @export
+#'
+#' @examples
+#' npsat.WriteGridAxis("axis1.dat, c(0,100,23), "CONST")
+#' will generate an axis with ticks starting from zero to 2200
+#' npsat.WriteGridAxis("axis1.dat, x, "VAR")
+#' will print the vector x as the axis. Note that it is not checked for doubles or
+#' non monotonous increase in this function neither by the program itself
+npsat.WriteGridAxis <- function(filename, x, spacing){
+  if (spacing == "CONST"){
+    N <- x[3]
+  }
+  else{
+    N <- length(x)
+  }
+  write(paste(spacing,N), file = filename, append = F)
+  if (spacing == "CONST"){
+    write(x[1:2], file = filename, append = T)
+  }
+  else{
+    write.table(x, file = filename, append = T, row.names = F, col.names = F)
+  }
+}
+
+#' npsat.WriteGridData writes data values for gridded interpolation
+#'
+#' @param filename This is the name of the file
+#' @param data The data to print. this is either an 1D vector, a 2D matrix or 3D array
+#' @param method METHOD is LINEAR or NEAREST
+#' @param axisFiles is the names of the files that describe the axis objects.
+#'
+#' @return just prints a file
+#' @export
+#'
+#' @examples
+#' 2D Example:
+#' N = 20
+#' P <- peaks(v = N)
+#' x <- 10*P$X[1, ]
+#' y <- 10*P$Y[, 1]
+#' orig <- -30
+#' dx <- diff(x)[1]
+#' writeAxis("peakAxis_cnst.tmp", c(orig, dx, N), "CONST")
+#' writeData("peak_data_cnst_p.tmp", data = P$Z, mode = "POINT", "LINEAR",
+#'            axisFiles = c("Rgridinterp/peakAxis_cnst.tmp", "Rgridinterp/peakAxis_cnst.tmp"))
+#' Note that we pass as many axisFiles as needed. In this example the x and y axis are identical so we pass the same file
+npsat.WriteGridData <- function(filename, data, method, axisFiles){
+  if (is.null(dim(data))){
+    write(paste(method, length(data)), file = filename, append = F)
+    write(axisFiles, file = filename, append = T, ncolumns = length(axisFiles))
+    write.table(data, file = filename, append = T, row.names = F, col.names = F)
+  }
+  else{
+    if (length(dim(data)) == 2){
+      write(paste(method, dim(data)[2], dim(data)[1]), file = filename, append = F)
+      write(axisFiles, file = filename, append = T, ncolumns = length(axisFiles))
+      write.table(data, file = filename, append = T, row.names = F, col.names = F)
+    }
+    else if (length(dim(data)) == 3){
+      write(paste(method, dim(data)[2], dim(data)[1], dim(data)[3]), file = filename, append = F)
+      write(axisFiles, file = filename, append = T, ncolumns = length(axisFiles))
+      for (i in 1:dim(data)[3]) {
+        write.table(data[,,i], file = filename, append = T, row.names = F, col.names = F)
+      }
+    }
+  }
+}
+
+npsat.WriteWells4ichnos <- function(filename, wells){
+
+}

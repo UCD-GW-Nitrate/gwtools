@@ -647,7 +647,7 @@ c2vsim.writeDivSpec <- function(filename, DivSpec){
   }
 
   write(DivSpec$headers[2], file = con)
-  write(DivSpe$headers[3], file = con)
+  write(DivSpec$headers[3], file = con)
   write("1min", file = con)
   write(DivSpec$headers[4], file = con)
   write("1min", file = con)
