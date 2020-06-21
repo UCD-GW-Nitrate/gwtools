@@ -199,6 +199,9 @@ npsat.ReadWaterTableCloudPoints <- function(prefix, suffix = 'top', nproc = 1, i
                           header = FALSE, sep = "", skip = 0, nrows = 1,
                           quote = "",fill = TRUE,
                           col.names = c("N"))
+    if (npoints == 0){
+      next
+    }
     datapnts <- read.table(file = fname,
                            header = FALSE, sep = "", skip = 1, nrows = npoints$N,
                            quote = "",fill = TRUE)
