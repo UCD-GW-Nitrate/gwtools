@@ -1,4 +1,12 @@
 function h = readIWFM_headalloutput(varargin)
+% readIWFM_headalloutput read the output of the outputfile specified at
+% GWALLOU in the main groundwater input file.
+% This function is relatively slow but works without specifying additional
+% inputs such as number of nodes layers etc. It should identify everything
+% from the head output file.
+% Inputs: filename
+%
+% Optional true or false for supressing to print the timesteps
 
 if nargin == 1
     filename = varargin{1};
