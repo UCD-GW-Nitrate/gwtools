@@ -1,5 +1,7 @@
 function VelOut = readIWFM_Velocity(filename, Nel, Nlay)
-%readC2Vsim_Velocity Read the velocity field that is specified in the 
+% VelOut = readIWFM_Velocity(filename, Nel, Nlay)
+%
+% readC2Vsim_Velocity Read the velocity field that is specified in the 
 % VELOUTFL parameter
 % Nel is the number of elements which is 32537 for the C2VsimFGv1 version
 % Nlay is the number of layers which is 4
