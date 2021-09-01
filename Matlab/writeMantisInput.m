@@ -37,7 +37,7 @@ if ~isempty(opt.ScreenLenRange)
     fprintf(fid, 'ScreenLenRange %.2f %.2f\n', opt.ScreenLenRange);
 end
 if ~isempty(opt.SourceArea)
-    fprintf(fid, 'RectSelect %df %df %df %.2f\n', opt.SourceArea);
+    fprintf(fid, 'SourceArea %d %d %d %.2f\n', opt.SourceArea);
 end
 if isempty(opt.Crops)
     opt.Crops = [-9 1];
@@ -46,7 +46,7 @@ fprintf(fid, 'Ncrops %d\n', size(opt.Crops,1));
 fprintf(fid, '%d %.3f\n', opt.Crops');
 
 if ~isempty(opt.PixelRadius)
-    fprintf(fid, 'RectSelect %d\n', opt.PixelRadius);
+    fprintf(fid, 'PixelRadius %d\n', opt.PixelRadius);
 end
 
 if ~isempty(opt.DebugID)

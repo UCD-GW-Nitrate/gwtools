@@ -1,4 +1,4 @@
-function btc = runMantis(Scenario, client)
+function varargout = runMantis(Scenario, client, varargin)
 %UNTITLED5 runMantis run the simulation for the options specified in the
 %scenario.
 %   This function triggers a sequence of events
@@ -16,9 +16,20 @@ function btc = runMantis(Scenario, client)
 %               the MantisInputs
 %   client:     is the paths including the executable name of the test client program      
 
+if ~isempty(varargin)
+   if strcmp('quit',  varargin{1})
+       system([client ' quit']);
+       return
+   end
+end
+
 delete(Scenario.outfile)
 writeMantisInput(Scenario);
 system([client ' ' Scenario.infile ' ' Scenario.outfile]);
 [btc tf] = readMantisOutput(Scenario.outfile);
+varargout{1} = btc;
+varargout{2} = tf;
+
+
 end
 
