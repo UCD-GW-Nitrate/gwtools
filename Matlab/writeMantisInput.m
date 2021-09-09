@@ -19,7 +19,7 @@ fprintf(fid, 'unsatWC %.2f\n', opt.unsatWC);
 fprintf(fid, 'bMap %s\n', opt.bMap);
 
 fprintf(fid, 'Nregions %d', length(opt.Regions));
-for ii = length(opt.Regions)
+for ii = 1:length(opt.Regions)
     fprintf(fid, ' %s',opt.Regions{ii});
 end
 fprintf(fid, '\n');
