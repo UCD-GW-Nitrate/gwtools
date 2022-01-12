@@ -21,7 +21,7 @@ for ii = 1:length(lines)
     if pid == -9
         Eid = str2double(C{2});
         Sid = str2double(C{3});
-        [Eid Sid]
+        %[Eid Sid]
         S(idx,1).Eid = str2double(C{2});
         S(idx,1).Sid = str2double(C{3});
         S(idx,1).p = p(1:cnt_pid-1,:);

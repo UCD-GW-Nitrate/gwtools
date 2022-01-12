@@ -1,12 +1,36 @@
-function VelOut = readIWFM_Velocity(filename, Nel, Nlay)
-% VelOut = readIWFM_Velocity(filename, Nel, Nlay)
+function VelOut = readIWFM_Velocity(varargin)
+% VelOut = readIWFM_Velocity(filename, Nel, Nlay, mult)
 %
-% readC2Vsim_Velocity Read the velocity field that is specified in the 
+% readC2Vsim_Velocity Reads the velocity field that is specified in the 
 % VELOUTFL parameter
-% Nel is the number of elements which is 32537 for the C2VsimFGv1 version
-% Nlay is the number of layers which is 4
+% filaname: is the name of the file
+% Nel:      is the number of elements which is 32537 for the C2VsimFGv1 version.
+% Nlay:     is the number of layers which is 4.
+% mult:     is the multiplier FACTVROU. In this function this multiplier 
+%           actually divides the velocity to convert it to FT/MONTH which is the
+%           consistent unit used in the C2VSim simulation.
 
-%   Detailed explanation goes here
+if nargin == 1
+    filename = varargin{1};
+    Nel = 32537;
+    Nlay = 4;
+    mult = 1;
+elseif nargin == 2
+    filename = varargin{1};
+    Nel = varargin{2};
+    Nlay = 4;
+    mult = 1;
+elseif nargin == 3
+    filename = varargin{1};
+    Nel = varargin{2};
+    Nlay = varargin{3};
+    mult = 1;
+elseif nargin > 3
+    filename = varargin{1};
+    Nel = varargin{2};
+    Nlay = varargin{3};
+    mult = varargin{4};
+end
 
 str = fileread(filename);
 lines = regexp(str, '\r\n|\r|\n', 'split')';
@@ -44,16 +68,16 @@ while idx < length(lines)
         C(:,1) =  [];
         tmp = cellfun(@str2double,C)';
         tmp1 = reshape(tmp(2:end), length(tmp(2:end))/Nlay, Nlay);
-        VX(tmp(1),idx_step,:) = tmp1(1,:);
-        VY(tmp(1),idx_step,:) = tmp1(2,:);
-        VZ(tmp(1),idx_step,:) = tmp1(3,:);
+        VX(tmp(1),idx_step,:) = tmp1(1,:)/mult;
+        VY(tmp(1),idx_step,:) = tmp1(2,:)/mult;
+        VZ(tmp(1),idx_step,:) = tmp1(3,:)/mult;
         idx = idx + 1;
         for j = 2:Nel
             cc = cell2mat(textscan(lines{idx,1},'%f'));
             tmp = reshape(cc(2:end), length(cc(2:end))/Nlay, Nlay);
-            VX(cc(1),idx_step,:) = tmp(1,:);
-            VY(cc(1),idx_step,:) = tmp(2,:);
-            VZ(cc(1),idx_step,:) = tmp(3,:);
+            VX(cc(1),idx_step,:) = tmp(1,:)/mult;
+            VY(cc(1),idx_step,:) = tmp(2,:)/mult;
+            VZ(cc(1),idx_step,:) = tmp(3,:)/mult;
             if j ~= Nel
                 idx = idx + 1;
             end

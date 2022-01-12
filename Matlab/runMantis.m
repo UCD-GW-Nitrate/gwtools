@@ -18,14 +18,14 @@ function varargout = runMantis(Scenario, client, varargin)
 
 if ~isempty(varargin)
    if strcmp('quit',  varargin{1})
-       system([client ' quit']);
+       system([client ' quit > $null']);
        return
    end
 end
 
-delete(Scenario.outfile)
+delete(Scenario.outfile);
 writeMantisInput(Scenario);
-system([client ' ' Scenario.infile ' ' Scenario.outfile]);
+system([client ' ' Scenario.infile ' ' Scenario.outfile '> $null']);
 [btc tf] = readMantisOutput(Scenario.outfile);
 varargout{1} = btc;
 varargout{2} = tf;
