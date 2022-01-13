@@ -18,22 +18,21 @@ mantis.ScenarioOptions <- function(){
               unsatScen = 'C2VSIM_SPRING_2000',
               wellType = 'VI',
               unsatWC = 0.01,
-              rchScen = 'C2VSIM_II_01',
               bMap = 'Subregions',
               Regions = c('Subregion1','Subregion2'),
-              RadSelect = c(), # X Y radius
-              RectSelect = c(), # Xmin Ymin Xmax Ymax
-              DepthRange = c(), #min max
-              ScreenLenRange = c(), #min max
+              RadSelect = NA, # X Y radius
+              RectSelect = NA, # Xmin Ymin Xmax Ymax
+              DepthRange = NA, #min max
+              ScreenLenRange = NA, #min max
               loadScen = 'GNLM',
-              loadSubScen = '',
-              modifierName = '',
-              modifierType = '',
-              isLoadConc = 1,
+              loadSubScen = NA,
+              modifierName = NA,
+              modifierType = NA,
+              modifierUnit = NA,
               Crops = matrix(c(-9,1),nrow = 1, ncol = 2),
-              SourceArea = c(), #Npixels minPixels maxPixels percPixels
-              PixelRadius = c(),
-              DebugID = '')
+              SourceArea = NA, #Npixels minPixels maxPixels percPixels
+              PixelRadius = NA,
+              DebugID = NA)
     return(opt)
 }
 
@@ -51,14 +50,40 @@ mantis.Run <- function(scenario, client_prog){
 
 mantis.WriteInput <-function(scenario){
   con <- file(scenario$infile, open = "w")
-  write(paste("endSimYear", scenario$endSimYear), file = con)
-  write(paste("startRed", scenario$startRed), file = con, append = T)
-  write(paste("endRed", scenario$endRed), file = con, append = T)
-  write(paste("flowScen", scenario$flowScen), file = con, append = T)
-  write(paste("unsatScen", scenario$unsatScen), file = con, append = T)
-  write(paste("wellType", scenario$wellType), file = con, append = T)
-  write(paste("unsatWC", scenario$unsatWC), file = con, append = T)
-  write(paste("rchScen", scenario$rchScen), file = con, append = T)
-  write(paste("bMap", scenario$bMap), file = con, append = T)
+  scenNames <- names(scenario)
+  appnd <- FALSE
+  if (!is.na(scenario$descr)){
+    write(paste('#', scenario$descr) , file = con, append = appnd)
+    appnd <- TRUE
+  }
 
+  for (i in 4:length(scenNames)) {
+    if (!is.na(scenario[[i]][1])){
+      if (scenNames[i] == 'Regions'){
+        tmp <- paste('Nregions', length(scenario$Regions))
+        write(paste(tmp, paste(scenario$Regions, collapse= " ") ) , file = con, append = appnd)
+      }
+      else if (scenNames[i] == 'Crops'){
+        write(paste('Ncrops', dim(scenario$Crops)[1]) , file = con, append = appnd)
+        for (j in 1:dim(scenario$Crops)[1]) {
+          write(paste(scenario$Crops[j,1], scenario$Crops[j,2]) , file = con, append = appnd)
+        }
+      }
+      else{
+        tmp <- paste(scenario[[i]],collapse= " ")
+         write(paste(scenNames[i], tmp) , file = con, append = appnd)
+      }
+      if (!appnd){
+        appnd <- TRUE
+      }
+    }
+  }
+  close(con)
+}
+
+mantis.ReadOutput <- function(filename){
+  con <- file(filename, open = "r")
+  line <- readLines(con)
+  close(con)
+  tmp <- utils::read.table(file='filename',skip = 1)
 }
