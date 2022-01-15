@@ -13,6 +13,5 @@ A data frame with the budget terms corresponding to the entire area
 mantis.ScenarioOptions Returns a structure with all available Mantis Scenario options
 }
 \examples{
-GWB <- c2vsim.readGWBUD("CVground.BUD", Nsub = 21, Nskip = c(8,rep(9,20)), NtimeSteps = 1056, CG = TRUE)
-GWBUDALL <- c2vsim.cumBUD(GWB, ids = c(5,10,21))
+scenario<-mantis.ScenarioOptions()
 }

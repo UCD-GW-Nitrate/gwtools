@@ -1,6 +1,9 @@
+# How to build and install the package
+# devtools::document()
+# devtools::load_all()
+# devtools::install()
+
 #' mantis.ScenarioOptions Returns a structure with all available Mantis Scenario options
-#'
-#'
 #'
 #' @return A data frame with the budget terms corresponding to the entire area
 #' @export
@@ -37,17 +40,57 @@ mantis.ScenarioOptions <- function(){
 }
 
 
-
+#' mantis.Run Runs the scenario and returns the results
+#'
+#' @param scenario is a list with the scenario options
+#' @param client_prog is the path to the Mantis client executable
+#'
+#' @return a list with the well breakthrough curves
+#' @export
+#'
+#' @examples
+#' result <- mantis.Run(scenario, 'MantisClient.exe')
 mantis.Run <- function(scenario, client_prog){
   # Remove the output file
   if (file.exists(scenario$outfile)){
     file.remove(scenario$outfile)
   }
   mantis.WriteInput(scenario)
+
+  system(paste(client_prog, scenario$infile, scenario$outfile))
+
+  res <- mantis.ReadOutput(scenario$outfile)
+  return(res)
 }
 
 
+#' mantis.Quit Stops the server
+#'
+#' @param client_prog is the path to the Mantis client executable
+#'
+#' @return Returns nothing. It just quits the server
+#' @export
+#'
+#' @examples
+#' mantis.Quit <- function( 'MantisClient.exe')
+mantis.Quit <- function(client_prog){
+  system(paste(client_prog, 'quit'))
+}
 
+
+#' mantis.WriteInput writes the input file for a given scenario.
+#' This is called by the mantis.Run and there is no reason why
+#' someone would need to run this
+#'
+#' @param scenario is a list with the scenario options
+#' @param client_prog is the path to the Mantis client executable
+#'
+#' @return It returns nothing and prints the input file.
+#' The name of the input file is set by the option scenario$infile
+#' @export
+#'
+#' @examples
+#' mantis.WriteInput <-function(scenario)
 mantis.WriteInput <-function(scenario){
   con <- file(scenario$infile, open = "w")
   scenNames <- names(scenario)
@@ -81,9 +124,27 @@ mantis.WriteInput <-function(scenario){
   close(con)
 }
 
+
+#' mantis.ReadOutput reads the output file of the mantis client.
+#' This is called by the mantis.Run and there is no reason why
+#' someone would need to run this
+#'
+#' @param filename This is the output file. The file name is specified
+#' with the option scenario$outfile
+#'
+#' @return returns a table with the wells break though curves.
+#' The number of rows is equal to the number of wells in the selected area
+#' and the number of columns is the number of simulation years
+#' @export
+#'
+#' @examples
+#' mantis.ReadOutput <- function(scenario$outfile)
 mantis.ReadOutput <- function(filename){
   con <- file(filename, open = "r")
-  line <- readLines(con)
+  line <- readLines(con,1)
   close(con)
-  tmp <- utils::read.table(file='filename',skip = 1)
+  t <- as.numeric(strsplit(substr(line,1,2000), split = " "))
+  NNs <- as.numeric(t[[1]])
+  res <- utils::read.table(file='filename',skip = 1)
+  return(res)
 }
