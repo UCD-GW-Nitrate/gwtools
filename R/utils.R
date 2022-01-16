@@ -1,7 +1,7 @@
 
 #' Convert subscripts to linear indices in column major order
 #'
-#' This function is somewhat the equivelant of the matlab sub2ind.
+#' This function is somewhat the equivalent of the Matlab sub2ind.
 #'
 #' @param i row index
 #' @param j column index
@@ -15,7 +15,7 @@ sub2ind <- function(i,j,n){
 
 #' Convert linear indices to subscripts in column major order
 #'
-#' This function is somewhat the equivelant of the matlab ind2sub.
+#' This function is somewhat the equivalent of the Matlab ind2sub.
 #'
 #' @param l linear index
 #' @param n number of rows

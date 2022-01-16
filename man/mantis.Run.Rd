@@ -4,12 +4,10 @@
 \alias{mantis.Run}
 \title{mantis.Run Runs the scenario and returns the results}
 \usage{
-mantis.Run(scenario, client_prog)
+mantis.Run(scenario)
 }
 \arguments{
 \item{scenario}{is a list with the scenario options}
-
-\item{client_prog}{is the path to the Mantis client executable}
 }
 \value{
 a list with the well breakthrough curves
@@ -18,5 +16,7 @@ a list with the well breakthrough curves
 mantis.Run Runs the scenario and returns the results
 }
 \examples{
-result <- mantis.Run(scenario, 'MantisClient.exe')
+scenario <- mantis.ScenarioOptions()
+scenario$client <- 'MantisClient.exe'
+result <- mantis.Run(scenario)
 }

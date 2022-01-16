@@ -15,5 +15,5 @@ t <- ind2sub(j,n), then A[t$r, t$c] == A[l] if dim(A)[1] == n
 the linear index.
 }
 \description{
-This function is somewhat the equivelant of the matlab ind2sub.
+This function is somewhat the equivalent of the Matlab ind2sub.
 }

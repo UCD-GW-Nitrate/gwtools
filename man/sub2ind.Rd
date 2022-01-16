@@ -17,5 +17,5 @@ ind <- sub2ind(i,j,n), then A[i,j] == A[ind] if dim(A)[1] == n
 the linear index.
 }
 \description{
-This function is somewhat the equivelant of the matlab sub2ind.
+This function is somewhat the equivalent of the Matlab sub2ind.
 }
