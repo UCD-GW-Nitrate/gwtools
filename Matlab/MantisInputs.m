@@ -1,6 +1,7 @@
 function opt = MantisInputs()
 %MantisOptions Returns a structure with the simulation inputs
 %   Detailed explanation goes here
+opt.client = '';
 opt.infile = 'incomingMSG.dat';
 opt.outfile = 'testClientResults.dat';
 opt.descr = {'This is a description of the simulation input','It will be ignored'};
@@ -22,7 +23,7 @@ opt.loadScen = 'GNLM';
 opt.loadSubScen = '';
 opt.modifierName = '';
 opt.modifierType = '';
-opt.isLoadConc = 1;
+opt.modifierUnit = '';
 opt.Crops = [-9 1];
 opt.SourceArea = []; %Npixels minPixels maxPixels percPixels
 opt.PixelRadius = [];

@@ -1,4 +1,4 @@
-function varargout = runMantis(Scenario, client, varargin)
+function varargout = runMantis(Scenario, varargin)
 %UNTITLED5 runMantis run the simulation for the options specified in the
 %scenario.
 %   This function triggers a sequence of events
@@ -18,15 +18,15 @@ function varargout = runMantis(Scenario, client, varargin)
 
 if ~isempty(varargin)
    if strcmp('quit',  varargin{1})
-       system([client ' quit > $null']);
+       system([Scenario.client ' quit > $null']);
        return
    end
 end
 
 delete(Scenario.outfile);
 writeMantisInput(Scenario);
-system([client ' ' Scenario.infile ' ' Scenario.outfile '> $null']);
-[btc tf] = readMantisOutput(Scenario.outfile);
+system([Scenario.client ' ' Scenario.infile ' ' Scenario.outfile '> $null']);
+[btc, tf] = readMantisOutput(Scenario.outfile);
 varargout{1} = btc;
 varargout{2} = tf;
 

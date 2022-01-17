@@ -13,6 +13,7 @@ fprintf(fid, 'endSimYear %d\n', opt.endSimYear);
 fprintf(fid, 'startRed %d\n', opt.startRed);
 fprintf(fid, 'endRed %d\n', opt.endRed);
 fprintf(fid, 'flowScen %s\n', opt.flowScen);
+fprintf(fid, 'wellType %s\n', opt.wellType);
 fprintf(fid, 'loadScen %s\n', opt.loadScen);
 fprintf(fid, 'unsatScen %s\n', opt.unsatScen);
 fprintf(fid, 'unsatWC %.2f\n', opt.unsatWC);
@@ -23,6 +24,22 @@ for ii = 1:length(opt.Regions)
     fprintf(fid, ' %s',opt.Regions{ii});
 end
 fprintf(fid, '\n');
+
+if ~isempty(opt.loadSubScen)
+    fprintf(fid, 'loadSubScen %s\n', opt.loadSubScen);
+end
+
+if ~isempty(opt.modifierName)
+    fprintf(fid, 'modifierName %s\n', opt.modifierName);
+end
+
+if ~isempty(opt.modifierType)
+    fprintf(fid, 'modifierType %s\n', opt.modifierType);
+end
+
+if ~isempty(opt.modifierUnit)
+    fprintf(fid, 'modifierUnit %s\n', opt.modifierUnit);
+end
 
 if ~isempty(opt.RadSelect)
     fprintf(fid, 'RadSelect %.2f %.2f %.2f\n', opt.RadSelect);

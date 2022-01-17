@@ -64,7 +64,7 @@ mantis.Run <- function(scenario){
   }
   mantis.WriteInput(scenario)
 
-  system(paste(scenario$client, scenario$infile, scenario$outfile))
+  system2(command = scenario$client, args = c(scenario$infile, scenario$outfile))
 
   res <- mantis.ReadOutput(scenario$outfile)
   return(res)
@@ -85,7 +85,7 @@ mantis.Run <- function(scenario){
 #' mantis.Quit <- function( scenario)
 mantis.Quit <- function(scenario){
   if (!is.na(scenario$client)){
-    system(paste(scenario$client, 'quit'))
+    system2(command = scenario$client, args = c('quit'))
     return(1)
   }
   else{
@@ -109,7 +109,7 @@ mantis.Quit <- function(scenario){
 #' mantis.Ping <- function( scenario)
 mantis.Ping <- function(scenario){
   if (!is.na(scenario$client)){
-    system(paste(scenario$client, 'ping', scenario$outfile))
+    system2(command = scenario$client, args = c('ping', scenario$outfile))
     outmsg <- mantis.ReadOutput(scenario$outfile)
   }
   else{
