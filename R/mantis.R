@@ -33,6 +33,11 @@ mantis.ScenarioOptions <- function(){
               modifierName = NA,
               modifierType = NA,
               modifierUnit = NA,
+              minRch = 10,
+              maxConc = -1,
+              loadTrans = NA,
+              loadTransYearStart = NA,
+              loadTransYearEnd = NA,
               Crops = matrix(c(-9,1),nrow = 1, ncol = 2),
               SourceArea = NA, #Npixels minPixels maxPixels percPixels
               PixelRadius = NA,
