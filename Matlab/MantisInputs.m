@@ -25,6 +25,7 @@ opt.modifierType = '';
 opt.modifierUnit = '';
 opt.Crops = [-9 1];
 opt.minRch = 10;
+opt.rchMap = [];
 opt.maxConc = -1;
 opt.loadTrans = '';
 opt.loadTransYearStart = 2005;

@@ -65,6 +65,10 @@ if ~isempty(opt.minRch)
     fprintf(fid, 'minRch %.2f\n', opt.minRch);
 end
 
+if ~isempty(opt.rchMap)
+    fprintf(fid, 'rchMap %s\n', opt.rchMap);
+end
+
 if ~isempty(opt.maxConc)
     fprintf(fid, 'maxConc %.2f\n', opt.maxConc);
 end
