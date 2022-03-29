@@ -33,5 +33,6 @@ opt.loadTransYearEnd = 2020;
 opt.SourceArea = []; %Npixels minPixels maxPixels percPixels
 opt.PixelRadius = [];
 opt.DebugID = [];
+opt.getids = [];
 end
 

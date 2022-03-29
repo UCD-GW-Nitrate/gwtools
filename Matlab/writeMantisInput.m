@@ -91,6 +91,12 @@ if ~isempty(opt.DebugID)
     fprintf(fid, 'DebugID %s\n', opt.DebugID);
 end
 
+if ~isempty(opt.getids)
+    if opt.getids ~= 0
+        fprintf(fid, 'getids 1\n');
+    end
+end
+
 fclose(fid);
 end
 
