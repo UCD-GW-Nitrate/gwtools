@@ -2,8 +2,8 @@ function S = readICHNOStraj(filename)
 cc = strsplit(filename, '.');
 if strcmp(cc{end},'h5')
     info = h5info(filename);
-    PVA = h5read(info.Filename,[info.Name,info.Datasets(3).Name])';
-    ESID = h5read(info.Filename,[info.Name,info.Datasets(1).Name])';
+    PVA = double(h5read(info.Filename,[info.Name,info.Datasets(3).Name])');
+    ESID = double(h5read(info.Filename,[info.Name,info.Datasets(1).Name])');
     ER = h5read(info.Filename,[info.Name,info.Datasets(2).Name]);
     
     S(size(ESID,1),1).Eid = [];
