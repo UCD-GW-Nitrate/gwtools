@@ -7,6 +7,7 @@ opt.outfile = 'testClientResults.dat';
 opt.descr = {'This is a description of the simulation input','It will be ignored'};
 opt.endSimYear = 2100;
 opt.startRed = 2020;
+opt.constRed = [];
 opt.endRed = 2030;
 opt.flowScen = 'C2VSIM_II_02';
 opt.unsatScen = 'C2VSIM_SPRING_2000';

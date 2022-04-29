@@ -18,6 +18,7 @@ mantis.ScenarioOptions <- function(){
               endSimYear = 2100,
               startRed = 2020,
               endRed = 2030,
+              constRed = NA,
               flowScen = 'C2VSIM_II_02',
               unsatScen = 'C2VSIM_SPRING_2000',
               wellType = 'VI',
@@ -42,6 +43,7 @@ mantis.ScenarioOptions <- function(){
               loadTransYearEnd = NA,
               SourceArea = NA, #Npixels minPixels maxPixels percPixels
               PixelRadius = NA,
+              getids = NA,
               DebugID = NA)
     return(opt)
 }

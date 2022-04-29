@@ -55,6 +55,10 @@ if ~isempty(opt.modifierUnit)
     fprintf(fid, 'modifierUnit %s\n', opt.modifierUnit);
 end
 
+if ~isempty(opt.constRed)
+    fprintf(fid, 'constRed %.3f\n', opt.constRed);
+end
+
 if isempty(opt.Crops)
     opt.Crops = [-9 1];
 end
