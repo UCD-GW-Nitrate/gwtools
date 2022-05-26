@@ -203,3 +203,33 @@ mantis.ReadOutput <- function(filename){
     return(res)
   }
 }
+
+
+#' mantis.ReadWells reads the well input file.
+#'
+#' @param filename This is the name of the input file.
+#'
+#' @return returns a table with the info for the wells.
+#' The fields are:
+#'
+#' ID: well id
+#'
+#' X, Y: Well coordinate in EPSG 3310
+#'
+#' Depth: Depth of the well. This is the distance between the simulated water table and the top of the screen
+#'
+#' SL: Screen length. Distance between top and bottom of the well screen
+#'
+#' Ratio, Angle: These two parameter define the shape of the well source area
+#'
+#' The remaining parameters show in which sub area the well belongs to.
+#'
+#' @export
+#'
+#' @examples
+#' mantis.ReadWells <- function(C2VSIM_II_02_VI_Wells.mnts)
+mantis.ReadWells <- function(filename){
+  cnames <- c('ID','X', 'Y', 'Depth','SL', 'Q','Ratio','Angle','CV','Basin','County','B118','TWN','SubReg')
+  d <- read.table(file = fn, header = FALSE,skip = 1, row.names = NULL, col.names = cnames)
+    return(d)
+}
