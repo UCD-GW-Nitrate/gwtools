@@ -33,9 +33,9 @@ C = strsplit(strtrim(lines{current_line,1}));
 NRTB = str2double(C{1,1});
 
 STREAMS(NRH,1).ID = [];
-STREAMS(ii,1).Name = [];
-STREAMS(ii,1).ND = [];
-STREAMS(ii,1).IBDR = [];
+STREAMS(NRH,1).Name = [];
+STREAMS(NRH,1).ND = [];
+STREAMS(NRH,1).IBDR = [];
 
 % Read the stream nodes specifications
 
@@ -94,14 +94,26 @@ for ii = 1:NriverNodes
     C = strsplit(strtrim(lines{current_line,1}));
     NODES(ii,1).IRV = str2double(C{1,1});
     NODES(ii,1).BOTR = str2double(C{1,2});
-    RTBL = table('size',[NRTB, 2],'VariableTypes',{'double','double'},'VariableNames',{'HRTB','QRTB'});
+    if length(C) == 4
+        RTBL = table('size',[NRTB, 2],'VariableTypes',{'double','double'},'VariableNames',{'HRTB','QRTB'});
+        has_Wper = false;
+    elseif length(C) == 5
+        RTBL = table('size',[NRTB, 3],'VariableTypes',{'double','double','double'},'VariableNames',{'HRTB','QRTB','WRTB'});
+        has_Wper = true;
+    end
     RTBL.HRTB(1) = str2double(C{1,3});
     RTBL.QRTB(1) = str2double(C{1,4});
+    if has_Wper
+        RTBL.WRTB(1) = str2double(C{1,5});
+    end
     for j = 2:NRTB
         current_line = current_line + 1;
         C = strsplit(strtrim(lines{current_line,1}));
         RTBL.HRTB(j) = str2double(C{1,1});
         RTBL.QRTB(j) = str2double(C{1,2});
+        if has_Wper
+            RTBL.WRTB(j) = str2double(C{1,3});
+        end
     end
     NODES(ii,1).RTBL = RTBL;
 end
