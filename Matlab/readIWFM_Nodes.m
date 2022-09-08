@@ -20,7 +20,7 @@ while 1
             ND = str2double(C{1,1});
             C = parseLine(fgetl(fid));
             FACT = str2double(C{1,1});
-            XY = nan(ND,2);
+            XY = nan(ND,3);
             read_header = false;
         else
             for ii = 1:ND
@@ -28,7 +28,7 @@ while 1
                     temp = fgetl(fid);
                 end
                 C = parseLine(temp);
-                XY(str2double(C{1,1}),:) = [str2double(C{1,2}) str2double(C{1,3})];
+                XY(ii,:) = [str2double(C{1,2}) str2double(C{1,3}) str2double(C{1,1})];
             end
             break;
         end

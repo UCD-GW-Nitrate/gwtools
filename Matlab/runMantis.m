@@ -1,4 +1,4 @@
-function varargout = runMantis(Scenario, varargin)
+function varargout = runMantis(Scenario)
 %UNTITLED5 runMantis run the simulation for the options specified in the
 %scenario.
 %   This function triggers a sequence of events
@@ -12,23 +12,34 @@ function varargout = runMantis(Scenario, varargin)
 %   5 Last this script reads the file and returns the results to the matlab
 %     workspace
 %
-%   Scenario:   is a structure with the scenario options. You can get one from
-%               the MantisInputs
-%   client:     is the paths including the executable name of the test client program      
-
-if ~isempty(varargin)
-   if strcmp('quit',  varargin{1})
-       system([Scenario.client ' quit > $null']);
-       return
-   end
+%   Scenario:   is a structure with the scenario options. You can get one
+%               by running MantisInputs()
+ 
+if isempty(Scenario.client)
+    warning('Scenario.client is empty');
+    for ii = 1:nargout
+        varargout{ii} = [];
+    end
+    return
 end
+
+% if ~isempty(varargin)
+%    if strcmp('quit',  varargin{1})
+%        system([Scenario.client ' quit > $null']);
+%        return
+%    end
+% end
 
 delete(Scenario.outfile);
 writeMantisInput(Scenario);
 system([Scenario.client ' ' Scenario.infile ' ' Scenario.outfile '> $null']);
 [btc, tf] = readMantisOutput(Scenario.outfile);
-varargout{1} = btc;
-varargout{2} = tf;
+if nargout > 0
+    varargout{1} = btc;
+end
+if nargout > 1
+    varargout{2} = tf;
+end
 
 
 end
