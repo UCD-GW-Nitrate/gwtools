@@ -4,7 +4,7 @@
 \alias{mantis.ScenarioOptions}
 \title{mantis.ScenarioOptions Returns a structure with all available Mantis Scenario options}
 \usage{
-mantis.ScenarioOptions()
+mantis.ScenarioOptions(client = NA)
 }
 \value{
 A data frame with the budget terms corresponding to the entire area

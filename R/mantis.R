@@ -10,8 +10,8 @@
 #'
 #' @examples
 #' scenario<-mantis.ScenarioOptions()
-mantis.ScenarioOptions <- function(){
-  opt <-list( client = NA,
+mantis.ScenarioOptions <- function(client = NA){
+  opt <-list( client = client,
               infile = 'incomingMSG.dat',
               outfile = 'testClientResults.dat',
               descr = 'This is a description of the simulation input',
@@ -19,7 +19,7 @@ mantis.ScenarioOptions <- function(){
               startRed = 2020,
               endRed = 2030,
               constRed = NA,
-              flowScen = 'C2VSIM_II_02',
+              flowScen = 'C2VSIM_II_03',
               unsatScen = 'C2VSIM_SPRING_2000',
               wellType = 'VI',
               unsatWC = 0.01,
@@ -76,30 +76,6 @@ mantis.Run <- function(scenario){
 
   res <- mantis.ReadOutput(scenario$outfile)
   return(res)
-}
-
-
-#' mantis.Quit Stops the server
-#'
-#' @param scenario the only useful option for this function
-#' is the client which is is the path to the client executable
-#'
-#' @return Returns nothing. It just quits the server
-#' @export
-#'
-#' @examples
-#' scenario <- mantis.ScenarioOptions()
-#' scenario$client <- 'MantisClient.exe'
-#' mantis.Quit <- function( scenario)
-mantis.Quit <- function(scenario){
-  if (!is.na(scenario$client)){
-    system2(command = scenario$client, args = c('quit'))
-    return(1)
-  }
-  else{
-    outmsg <- 'Client Path not specified'
-    return(outmsg)
-  }
 }
 
 #' mantis.Ping Test the communication with server.
