@@ -1,22 +1,34 @@
 function h = readIWFM_headalloutput(varargin)
-% readIWFM_headalloutput read the output of the outputfile specified at
+% readIWFM_headalloutput reads the output of the outputfile specified at
 % GWALLOU in the main groundwater input file.
-% This function is relatively slow but works without specifying additional
+% This function can be run with two modes 
+%
+% One is relatively slow but works without specifying additional
 % inputs such as number of nodes layers etc. It should identify everything
 % from the head output file.
-% Inputs: filename
 %
-% Optional true or false for supressing to print the timesteps
+% USAGE
+% h = readIWFM_headalloutput(filename)
+% h = readIWFM_headalloutput(filename, 0 or 1)
+%
+% Inputs: 
+% filename
+%
+% The second mode is a bit faster but requires the following inputs
+%
+% USAGE
+% h = readIWFM_headalloutput(filename, Nnodes, Nlay, Ntimes, 0 or 1)
+%
+% Inputs: 
+% filename
+% Nnodes: Number of nodes
+% Nlay: Number of layers
+% Ntimes: Number of times
+%
+% In both modes you can specify to print or not the reading progress by
+% setting
+% printout : 0 not print, 1 print 
 
-% if nargin == 1
-%     filename = varargin{1};
-%     printout = true;
-% end
-% 
-% if nargin == 2
-%     filename = varargin{1};
-%     printout = varargin{2};
-% end
 
 if nargin == 1
     filename = varargin{1};
