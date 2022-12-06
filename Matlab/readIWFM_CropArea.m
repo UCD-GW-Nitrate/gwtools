@@ -13,6 +13,7 @@ CropAreas.YMD = zeros(Ntimes, 3);
 for ii = 1:Ntimes
     C = strsplit(lines{current_line,1});
     cctime = textscan(C{1,1},'%f/%f/%f/_%s');
+    display(C{1,1});
     CropAreas.YMD(ii,:) = [cctime{3} cctime{1} cctime{2}];
     C(:,1) = [];
     CropAreas.Data{ii,1} = zeros(Nelem, Ncrops+1);
@@ -22,7 +23,7 @@ for ii = 1:Ntimes
          C = strsplit(lines{current_line,1});
          CC = cellfun(@str2double,C);
          CC(:,isnan(CC)) = [];
-         CropAreas.Data{ii,1}(j,:) = cellfun(@str2double,C);
+         CropAreas.Data{ii,1}(j,:) = CC;
          current_line = current_line + 1;
     end
 end
