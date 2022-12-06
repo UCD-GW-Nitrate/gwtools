@@ -1,10 +1,9 @@
 function varargout = runMantis(Scenario)
-%UNTITLED5 runMantis run the simulation for the options specified in the
-%scenario.
+% [btc, tf] = runMantis(Scenario) run the simulation for the options specified in the scenario.
 %   This function triggers a sequence of events
 %   1 prints the scenario options to a file.
-%   2 Executes the test clinet program which reads the input file 
-%     converts it to string message and sends it to the mantisServer
+%   2 Executes the test client program which reads the input file, 
+%     converts it to string message, and sends it to the mantisServer
 %   3 MantisServer runs the simulation and sends the results back to the 
 %     client program
 %   4 The client program receives the message and prints the results to a
