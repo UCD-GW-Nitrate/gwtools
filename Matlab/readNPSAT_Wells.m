@@ -12,5 +12,6 @@ Nwells = fscanf(fid, '%d',1);
 temp = fscanf(fid, '%f',Nwells*5);
 fclose(fid);
 wells = reshape(temp, 5, Nwells)';
+wells = [(1:size(wells,1))' wells];
 
-wells = array2table(wells, 'VariableNames', {'X','Y','Top','Bot', 'Q'});
+wells = array2table(wells, 'VariableNames', {'Eid','X','Y','Top','Bot', 'Q'});

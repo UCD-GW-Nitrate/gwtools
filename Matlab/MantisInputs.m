@@ -16,38 +16,71 @@ else
     opt.client = '';
 end
 
+% -----------------
+% Mantis client options
+% -----------------
 opt.infile = 'incomingMSG.dat';
 opt.outfile = 'testClientResults.dat';
 opt.descr = {'This is a description of the simulation input','It will be ignored'};
-opt.endSimYear = 2100;
-opt.startRed = 2020;
-opt.constRed = [];
-opt.endRed = 2030;
-opt.flowScen = 'C2VSIM_II_03';
-opt.unsatScen = 'C2VSIM_SPRING_2000';
+
+% -----------------
+% GUI Scenario Options
+% -----------------
+opt.modelArea = 'CentralValley';
+opt.bMap = 'Townships';
+opt.Regions = {'39M02S10E','39M02S09E'};
+opt.flowScen = 'C2VSIM_III_03';
 opt.wellType = 'VI';
+opt.unsatScen = 'C2VSIM_SPRING_2000';
 opt.unsatWC = 0.01;
-opt.bMap = 'Subregions';
-opt.Regions = {'Subregion1','Subregion2'};
-opt.RadSelect = []; % X Y radius
-opt.RectSelect = []; %Xmin Ymin Xmax Ymax
-opt.DepthRange = []; %min max
-opt.ScreenLenRange = []; %min max
-opt.loadScen = 'GNLM';
+opt.endSimYear = 2100;
+
+% -----------------
+% loading options
+% -----------------
+opt.loadScen = 'SWAT1';
+opt.startRed = 2020;
+opt.endRed = 2030;
+opt.Crops =[-9 0.85];
+
+% -----------------
+% Options that take default values
+% -----------------
+opt.minRch = 10;
+opt.maxConc = 250;
+opt.constRed = 1.0;
+opt.LoadTransitionName = 'GNLM';
+opt.LoadTransitionStart = 2005;
+opt.LoadTransitionEnd = 2015;
+opt.startSimYear = 1925;
+
+% -----------------
+% Filter Options
+% -----------------
+opt.RadSelect = [];
+opt.RectSelect = [];
+opt.DepthRange = [];
+opt.ScreenLenRange = [];
+opt.SourceArea = [];
+
+% -----------------
+% Raster loading Options
+% -----------------
 opt.loadSubScen = '';
 opt.modifierName = '';
 opt.modifierType = '';
 opt.modifierUnit = '';
-opt.Crops = [-9 1];
-opt.minRch = 10;
-opt.rchMap = [];
-opt.maxConc = -1;
-opt.loadTrans = '';
-opt.loadTransYearStart = 2005;
-opt.loadTransYearEnd = 2020;
-opt.SourceArea = []; %Npixels minPixels maxPixels percPixels
-opt.PixelRadius = [];
-opt.DebugID = [];
+
+% -----------------
+% Misc Options
+% -----------------
 opt.getids = [];
+opt.DebugID = [];
+opt.printLF = [];
+opt.printURF = [];
+opt.printBTC = [];
+opt.printWellBTC = [];
+opt.PixelRadius = [];
+
 end
 
