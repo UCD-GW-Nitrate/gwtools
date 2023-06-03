@@ -13,6 +13,8 @@ function varargout = runMantis(Scenario)
 %
 %   Scenario:   is a structure with the scenario options. You can get one
 %               by running MantisInputs()
+%
+% see also MantisInputs, writeMantisInput, readMantisOutput
  
 if isempty(Scenario.client)
     warning('Scenario.client is empty');

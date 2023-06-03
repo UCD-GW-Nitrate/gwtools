@@ -8,7 +8,8 @@ function opt = MantisInputs(varargin)
 %   scenario = MantisInputs(client)
 %   where client is the path of the MantisClient. This sets the 
 %   scenario.client = client
-
+%
+% see also runMantis
 
 if ~isempty(varargin)
     opt.client = varargin{1};
@@ -33,26 +34,27 @@ opt.flowScen = 'C2VSIM_III_03';
 opt.wellType = 'VI';
 opt.unsatScen = 'C2VSIM_SPRING_2000';
 opt.unsatWC = 0.01;
-opt.endSimYear = 2100;
+opt.endSimYear = 2150;
 
 % -----------------
 % loading options
 % -----------------
-opt.loadScen = 'SWAT1';
+opt.loadScen = 'GNLM';
 opt.startRed = 2020;
 opt.endRed = 2030;
-opt.Crops =[-9 0.85];
+opt.Crops = [];
 
 % -----------------
 % Options that take default values
 % -----------------
-opt.minRch = 10;
-opt.maxConc = 250;
-opt.constRed = 1.0;
-opt.LoadTransitionName = 'GNLM';
-opt.LoadTransitionStart = 2005;
-opt.LoadTransitionEnd = 2015;
-opt.startSimYear = 1925;
+opt.minRch = []; %10;
+opt.rchMap = '';
+opt.maxConc = []; %250;
+opt.constRed = []; %1.0;
+opt.LoadTransitionName = ''; %'GNLM';
+opt.LoadTransitionStart = []; %2035;
+opt.LoadTransitionEnd = []; %2025;
+opt.startSimYear = []; %1945;
 
 % -----------------
 % Filter Options

@@ -1,5 +1,5 @@
 function [btc, tf] = readMantisOutput(filename)
-%readMantisOutput Reads the outfile of the TestClient program.
+% readMantisOutput Reads the outfile of the TestClient program.
 % Returns an Nbtc x Nyrs matrix where Nbtc is the number of well
 % breakthrough curves and Nyrs is the number of simulation years.
 fid = fopen(filename,'r');
