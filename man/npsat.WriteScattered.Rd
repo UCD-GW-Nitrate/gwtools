@@ -20,16 +20,10 @@ For example it can be :
 [x v]
 [x v1 z1 v2 z2 ... vn-1 zn-1 vn]
 [x y v]
-[x y v1 z1 v2 z2 ... vn-1 zn-1 vn]}
-}
-\value{
-
+[x y v1 z1 v2 z2 ... vn-1 zn-1 vn]
+For 2D interpolation such as top, bottom elevation or recharge
+npsat.WriteScattered(filename, 2, "HOR", "SIMPLE", data)}
 }
 \description{
 npsat.WriteScattered writes to a file the
-}
-\examples{
-For 2D interpolation such as top, bottom elevation or recharge
-npsat.WriteScattered(filename, 2, "HOR", "SIMPLE", data)
-
 }

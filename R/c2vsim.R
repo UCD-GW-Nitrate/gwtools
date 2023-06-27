@@ -856,7 +856,7 @@ c2vsim.avHead <- function(HeadList, ids){
 #' @param maxChar The number of characters to read for each line
 #'
 #'
-#' @return
+#' @return The Land use
 #' @export
 c2vsim.read.LandUse <- function(filename, NtimeSteps = 88, Nelem = 1392, Ninfo = 5, colNames = NA, Nskip = 95, maxChar = 1000){
   if (is.na(colNames)){

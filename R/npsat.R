@@ -31,9 +31,6 @@ npsat.writeMesh <- function(filename, nd, msh){
 #' [x v1 z1 v2 z2 ... vn-1 zn-1 vn]
 #' [x y v]
 #' [x y v1 z1 v2 z2 ... vn-1 zn-1 vn]
-#'
-#' @return
-#' @examples
 #' For 2D interpolation such as top, bottom elevation or recharge
 #' npsat.WriteScattered(filename, 2, "HOR", "SIMPLE", data)
 #'
@@ -180,7 +177,7 @@ npsat.ReadWells <- function(filename){
 #' @param suffix This is 'top' by default
 #' @param nproc The number of processors used in the simulation
 #' @param iter the iteration number
-#' @print_file This is currently not used
+#' @param print_file This is currently not used
 #'
 #' @return A dataframe with the following fields:
 #' \itemize{

@@ -7,8 +7,6 @@
 #' @return a list of lenght nGew with a matrix in each entry representing the
 #'   current pareto front
 #' @export
-#'
-#' @examples
 nsgaii.readParetoHistory <- function(filename, nGen){
   l <- vector(mode = "list", length = nGen)
   nlinesskip <- 0
@@ -33,8 +31,6 @@ nsgaii.readParetoHistory <- function(filename, nGen){
 #' objective function values
 #'
 #' @export
-#'
-#' @examples
 nsgaii.readParetoSolution <- function(filename){
   l <- vector(mode = "list", length = 2)
   info <- scan(file =  filename, n = 3)
@@ -49,13 +45,9 @@ nsgaii.readParetoSolution <- function(filename){
 #' with respect to a reference point
 #'
 #' @param pareto This is the pareto front
-#' @param RefPnt This is the reference point. THat is a point htat is dominated by every solution
+#' @param RefPnt This is the reference point. That is a point that is dominated by every solution
 #' in the pareto front
-#'
-#' @return
 #' @export
-#'
-#' @examples
 nsgaii.calculateHyperVolume <- function(pareto, RefPnt){
   psort <- sort(pareto[,1], index.return = TRUE)
 

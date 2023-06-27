@@ -10,11 +10,8 @@ nsgaii.calculateHyperVolume(pareto, RefPnt)
 \arguments{
 \item{pareto}{This is the pareto front}
 
-\item{RefPnt}{This is the reference point. THat is a point htat is dominated by every solution
+\item{RefPnt}{This is the reference point. That is a point that is dominated by every solution
 in the pareto front}
-}
-\value{
-
 }
 \description{
 nsgaii.calculateHyperVolume Calculates the hypervolume of a given pareto front

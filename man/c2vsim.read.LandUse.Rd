@@ -31,7 +31,7 @@ c2vsim.read.LandUse(
 \item{maxChar}{The number of characters to read for each line}
 }
 \value{
-
+The Land use
 }
 \description{
 c2vsim.read.LandUse

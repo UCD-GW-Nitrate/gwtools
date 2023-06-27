@@ -9,7 +9,7 @@
 #' @return the linear index.
 #' @usage ind <- sub2ind(i,j,n), then A[i,j] == A[ind] if dim(A)[1] == n
 #' @export
-sub2ind <- function(i,j,n){
+util.sub2ind <- function(i,j,n){
   n*(j-1)+i
 }
 
@@ -23,7 +23,7 @@ sub2ind <- function(i,j,n){
 #' @usage t <- ind2sub(j,n), then A[t$r, t$c] == A[l] if dim(A)[1] == n
 #' @export
 #' @export
-ind2sub <- function(l,n){
+util.ind2sub <- function(l,n){
   c <- ceiling (l / n)
   r <- l - (c-1)*n
   return(cbind(r,c))
@@ -49,8 +49,7 @@ ind2sub <- function(l,n){
 #' @return the closest distance between the point and the line segment
 #' @export
 #'
-#' @examples
-distPointLineSeg <- function(xp, yp, x1, y1, x2, y2){
+util.distPointLineSeg <- function(xp, yp, x1, y1, x2, y2){
   L <- sqrt((x2 - x1)^2 + (y2 - y1)^2)
   r <- ((y1 - yp) * (y1 - y2)-(x1 - xp)*(x2 - x1))/L^2
   if (r > 1 | r < 0){
