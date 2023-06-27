@@ -114,3 +114,68 @@ modflow.readCBC <- function(filename, endian = "little", intsize = 4){
   close(flbn)
   return(Out)
 }
+
+
+#' modflow.readArrayASCII reads a 3D array that is printed in ASCII.
+#' This can be used to read the modflow heads when they are printed as ASCII
+#'
+#' @param filename is the file name
+#' @param nlay The number of layers
+#' @param maxchar A guess about the maximum width of the lines
+#'
+#' @return A list with one 3D array per time step
+#' @export
+#'
+#' @examples gwHead <- modflow.readArrayASCII(headsout.txt, nlay = 13)
+modflow.readArrayASCII <- function(filename, nlay, maxchar = 1000){
+  out <- vector(mode = "list", length = 0)
+  info <- vector(mode = "list", length = 0)
+  alllines <- readLines(filename)
+  iline <- 1
+  while(T){
+    for (k in 1:nlay) {
+      # Read the first line
+      t <- substr(alllines[iline], 1, maxchar)
+      iline <- iline + 1
+
+      t <- strsplit(t, split = " ")
+      t <- t[[1]][which(t[[1]] != "")]
+      if (k == 1){
+        print(paste("reading timestep: ",t[2]))
+      }
+
+      nrow <- as.numeric(t[7])
+      ncol <- as.numeric(t[6])
+      ilay <- as.numeric(t[8])
+      datalay <- array(data = NA, dim = c(nrow,ncol))
+
+      if (iline == 2){
+        dataArray <- array(data = NA, dim = c(nrow, ncol, nlay))
+      }
+      datalay[] <- NA
+      for (i in 1:nrow) {
+        col_ind_s <- 1
+        while(T){
+          t <- substr(alllines[iline], 1, maxchar)
+          iline <-  iline + 1
+          t <- strsplit(t, split = " ")
+          t <- as.numeric(t[[1]][which(t[[1]] != "")])
+          col_ind_e <- col_ind_s + length(t)-1
+          datalay[i,col_ind_s:col_ind_e] <- t
+          col_ind_s <- col_ind_e + 1
+          if (col_ind_s > ncol){
+            break
+          }
+        }
+      }
+      dataArray[,,ilay] <- datalay
+    }
+
+    out <- c(out, list(dataArray))
+    dataArray[] <- NA
+    if (iline > length(alllines)){
+      break
+    }
+  }
+  return(out)
+}
