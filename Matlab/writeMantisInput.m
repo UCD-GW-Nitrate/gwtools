@@ -110,20 +110,24 @@ end
 if ~isempty(opt.DebugID)
     fprintf(fid, 'DebugID %s\n', opt.DebugID);
     if ~isempty(opt.printLF)
-        fprintf(fid, 'printLF %s\n', opt.printLF);
+        fprintf(fid, 'printLF %d\n', opt.printLF);
     end
     if ~isempty(opt.printURF)
-        fprintf(fid, 'printURF %s\n', opt.printURF);
+        fprintf(fid, 'printURF %d\n', opt.printURF);
     end
     if ~isempty(opt.printBTC)
-        fprintf(fid, 'printBTC %s\n', opt.printBTC);
+        fprintf(fid, 'printBTC %d\n', opt.printBTC);
     end
     if ~isempty(opt.printWellBTC)
-        fprintf(fid, 'printWellBTC %s\n', opt.printWellBTC);
+        fprintf(fid, 'printWellBTC %d\n', opt.printWellBTC);
     end
 end
 if ~isempty(opt.PixelRadius)
     fprintf(fid, 'PixelRadius %d\n', opt.PixelRadius);
+end
+
+if ~isempty(opt.maxSourceCells)
+    fprintf(fid, 'maxSourceCells %d\n', opt.maxSourceCells);
 end
 
 

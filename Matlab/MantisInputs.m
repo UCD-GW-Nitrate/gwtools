@@ -83,6 +83,7 @@ opt.printURF = [];
 opt.printBTC = [];
 opt.printWellBTC = [];
 opt.PixelRadius = [];
+opt.maxSourceCells = [];
 
 end
 
