@@ -1,4 +1,14 @@
 function S = readICHNOStraj(varargin)
+% S = readICHNOStraj(varargin) 
+% Reads the streamline from Ichnos simulation
+% Usage:
+% S = readICHNOStraj(filename)
+% S = readICHNOStraj(filename, gatherflag)
+% where
+%   filename: is the name of the file to read
+%   gatherflag : indicates if the file is printed after gather or not
+
+
     if nargin == 1 || (nargin == 2 && varargin{2} == false)
         S = readTraj(varargin{1});
     elseif nargin == 2 && varargin{2} == true
@@ -12,7 +22,7 @@ function S = readICHNOStraj(varargin)
     end
 end
 
-function readGather
+function S = readGather
     str = fileread(filename);
     lines = regexp(str, '\r\n|\r|\n', 'split')';
     new_strmline = true;
@@ -60,7 +70,7 @@ function readGather
     S(idx+1:end,:) = [];
 end
 
-function readTraj(filename)
+function S = readTraj(filename)
     cc = strsplit(filename, '.');
     if strcmp(cc{end},'h5')
         info = h5info(filename);
