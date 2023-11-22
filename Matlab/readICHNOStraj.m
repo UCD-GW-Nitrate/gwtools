@@ -60,7 +60,7 @@ function readGather
     S(idx+1:end,:) = [];
 end
 
-function readTraj(filename)
+function S =readTraj(filename)
     cc = strsplit(filename, '.');
     if strcmp(cc{end},'h5')
         info = h5info(filename);
