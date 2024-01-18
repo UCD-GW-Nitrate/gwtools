@@ -1,5 +1,5 @@
 function [R, C] = CalcGridRowCol(P, gridSpec)
-%[R, C] = CalcGridRowCol(x,y,LL,cs) Calculates the rows and columns that
+%[R, C] = CalcGridRowCol(P, gridSpec) Calculates the rows and columns that
 %correspond to coordinates
 %
 %   P [nx2] : are the coordinates to calculate the corresponding row and
