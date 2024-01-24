@@ -1,12 +1,18 @@
-function PDF = VWGA_calc_2D_PDF(X, Y, s)
+function PDF = VWGA_calc_2D_PDF(X, Y, s, varargin)
 %% Calculates 2D propability density function
 
 in = ~isnan(X) & ~isnan(Y) & ~isinf(X) & ~isinf(Y);
 X = X(in);
 Y = Y(in);
 
-xlm = [min(X) max(X)];
-ylm = [min(Y) max(Y)];
+if nargin == 5
+    xlm = varargin{1};
+    ylm = varargin{2};
+else
+    xlm = [min(X) max(X)];
+    ylm = [min(Y) max(Y)];
+end
+
 dx = linspace(xlm(1), xlm(2), 101);
 dy = linspace(ylm(1), ylm(2), 101);
 dx_n = linspace(0, 100, 101);
@@ -33,7 +39,7 @@ PDF.X = dx;
 PDF.Y = dy;
 PDF.V = V;
 [nx, ny] = ndgrid(PDF.X, PDF.Y);
-PDF.F = griddedInterpolant(nx, ny, PDF.V','linear','linear');
+PDF.F = griddedInterpolant(nx, ny, PDF.V','linear','nearest');
 
 
 

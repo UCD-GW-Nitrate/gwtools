@@ -7,14 +7,14 @@ function [R, C] = CalcGridRowCol(P, gridSpec)
 %   gridSpec is a structure with the following fields
 %       cornerX   : is the X coordinate of the left lower point of the grid.
 %       cornerY   : is the Y coordinate of the left lower point of the grid.
-%       cellSise   : is the cell dimension
+%       cellSize   : is the cell dimension
 %       Nrows   : is the number of rows
 %       Ncols   : is the number of columns
 %
 %   See also MantisGridSpec
 
-XG = gridSpec.cornerX + [0 cumsum(gridSpec.cellSise*ones(1,gridSpec.Ncols))];
-YG = gridSpec.cornerY + [0 cumsum(gridSpec.cellSise*ones(1,gridSpec.Nrows))];
+XG = gridSpec.cornerX + [0 cumsum(gridSpec.cellSize*ones(1,gridSpec.Ncols))];
+YG = gridSpec.cornerY + [0 cumsum(gridSpec.cellSize*ones(1,gridSpec.Nrows))];
 
 Np = size(P,1);
 ind = [1:Np]';
