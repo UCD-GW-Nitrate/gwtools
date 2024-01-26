@@ -19,6 +19,7 @@ function S = readICHNOStraj(varargin)
         S(ii,1).Yend = S(ii,1).p(end,2);
         S(ii,1).Time = abs(S(ii,1).t(end));
         S(ii,1).Len = sum(sqrt(sum(diff(S(ii,1).p).^2,2)));
+        %S(ii,1).ER = categorical(S(ii,1).ER);
     end
 end
 
