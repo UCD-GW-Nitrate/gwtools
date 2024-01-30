@@ -50,6 +50,6 @@ end
 
 fprintf(fid, '%d %d %d\n', [size(COORDS,1) size(DATA,2), size(TR,1)]);
 
-fprintf(fid, [repmat('%f ', 1, size(COORDS,2) + size(DATA,2)) '\n'], [COORDS DATA]');
+fprintf(fid, [repmat('%.6e ', 1, size(COORDS,2) + size(DATA,2)) '\n'], [COORDS DATA]');
 fprintf(fid, '%d %d %d\n',[TR-1]');
 fclose(fid);
