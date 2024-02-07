@@ -11,7 +11,7 @@ function out = readNPSAT_Scattered( filename, PDIM)
 
 fid = fopen(filename);
 interp_type = fgetl(fid);
-if strcmp(interp_type, 'SCATTERED')
+if strcmp(interp_type, 'SCATTERED') || strcmp(interp_type, 'BOUNDARY_LINE')
     out.info.TYPE = fgetl(fid);
     out.info.MODE = fgetl(fid);
     N = fscanf(fid, '%d %d %d\n', 3);
