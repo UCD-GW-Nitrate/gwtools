@@ -5,12 +5,26 @@ in = ~isnan(X) & ~isnan(Y) & ~isinf(X) & ~isinf(Y);
 X = X(in);
 Y = Y(in);
 
-if nargin == 5
-    xlm = varargin{1};
-    ylm = varargin{2};
+ax = 1;
+ay = 1;
+if nargin == 5 || nargin == 7
+    if isempty(varargin{1})
+        xlm = [min(X) max(X)];
+    else
+        xlm = varargin{1};
+    end
+    if isempty(varargin{1})
+        ylm = [min(Y) max(Y)];
+    else
+        ylm = varargin{2};
+    end
 else
     xlm = [min(X) max(X)];
     ylm = [min(Y) max(Y)];
+end
+if nargin == 7
+    ax = varargin{3};
+    ay = varargin{4};
 end
 
 dx = linspace(xlm(1), xlm(2), 101);
@@ -24,13 +38,13 @@ Y_n = interp1(dy, dy_n, Y);
 [Xg, Yg] = meshgrid(0:100);
 %
 % Radial basis function
-nrm = @(x,y) sqrt((Xg - x).^2 + (Yg - y).^2);
+nrm = @(x,y,ax,ay) sqrt(ax^2*(Xg - x).^2 + ay^2*(Yg - y).^2);
 phi = @(r,s) exp(-(r./s).^2);
 V = zeros(size(Xg));
 for ii = 1:length(X_n)
     xm = X_n(ii);
     ym = Y_n(ii);
-    V = V + phi(nrm(xm, ym),s);
+    V = V + phi(nrm(xm, ym,ax,ay),s);
 end
 
 %
