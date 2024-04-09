@@ -30,8 +30,9 @@ end
 %        return
 %    end
 % end
-
-delete(Scenario.outfile);
+if exist(Scenario.outfile,"file") == 2
+    delete(Scenario.outfile);
+end
 writeMantisInput(Scenario);
 system([Scenario.client ' ' Scenario.infile ' ' Scenario.outfile '> $null']);
 [btc, tf] = readMantisOutput(Scenario.outfile);

@@ -5,7 +5,7 @@ function writeMantisInput(opt)
 fid = fopen(opt.infile,'w');
 if ~isempty(opt.descr)
     for ii = 1:length(opt.descr)
-        fprintf(fid, '# %s\n',opt.descr{ii})
+        fprintf(fid, '# %s\n',opt.descr{ii});
     end
 end
 

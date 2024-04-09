@@ -30,9 +30,9 @@ opt.descr = {'This is a description of the simulation input','It will be ignored
 opt.modelArea = 'CentralValley';
 opt.bMap = 'Townships';
 opt.Regions = {'39M02S10E','39M02S09E'};
-opt.flowScen = 'C2VSIM_III_03';
+opt.flowScen = 'CVHM2_MAR24_Padj';
 opt.wellType = 'VI';
-opt.unsatScen = 'C2VSIM_SPRING_2000';
+opt.unsatScen = 'CVHM2_MAR24_Padj';
 opt.unsatWC = 0.01;
 opt.endSimYear = 2150;
 

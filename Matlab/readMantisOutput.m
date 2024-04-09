@@ -9,8 +9,9 @@ Nyrs = temp{2};
 
 if Nbtc == 0
     tf = false;
-    temp = fgetl(fid);
-    display(temp);
+    %temp = fgetl(fid);
+    %temp = fgetl(fid);
+    %display(temp);
     btc = [];
 else
     tf = true;
