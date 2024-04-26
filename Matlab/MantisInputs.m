@@ -32,7 +32,7 @@ opt.bMap = 'Townships';
 opt.Regions = {'39M02S10E','39M02S09E'};
 opt.flowScen = 'CVHM2_MAR24_Padj';
 opt.wellType = 'VI';
-opt.unsatScen = 'CVHM2_MAR24_Padj';
+opt.unsatScen = 'CVHM2_MAR24';
 opt.unsatWC = 0.01;
 opt.endSimYear = 2150;
 
