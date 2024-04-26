@@ -1,4 +1,6 @@
 function cft = NPSAT_lgnrmfit(urf,opt)
+cft{1} = -1;
+cft{2} = -1;
 urf = urf(:);
 if opt.usematlab
     
