@@ -55,6 +55,8 @@ opt.LoadTransitionName = ''; %'GNLM';
 opt.LoadTransitionStart = []; %2035;
 opt.LoadTransitionEnd = []; %2025;
 opt.startSimYear = []; %1945;
+opt.por = []; %10;
+opt.urfType = []; % 'LGNRM' or 'ADE';
 
 % -----------------
 % Filter Options

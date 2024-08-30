@@ -63,6 +63,12 @@ end
 if ~isempty(opt.startSimYear)
     fprintf(fid, 'startSimYear %d\n', opt.startSimYear);
 end
+if ~isempty(opt.por)
+    fprintf(fid, 'por %d\n', opt.por);
+end
+if ~isempty(opt.urfType)
+    fprintf(fid, 'urfType %s\n', opt.urfType);
+end
 
 % -----------------
 % Filter Options
