@@ -1,4 +1,6 @@
 function f = minbbox(x,pp,tp)
+% Calculates the area of the bounding box after applying the rotation x
+
 % calculate the barycenter of the points
 bcx = mean(pp(:,1));
 bcy = mean(pp(:,2));
