@@ -57,6 +57,8 @@ opt.LoadTransitionEnd = []; %2025;
 opt.startSimYear = []; %1945;
 opt.por = []; %10;
 opt.urfType = []; % 'LGNRM' or 'ADE';
+opt.ADELR = [];
+opt.initConcParam = []; % mean std min max
 
 % -----------------
 % Filter Options
@@ -64,6 +66,8 @@ opt.urfType = []; % 'LGNRM' or 'ADE';
 opt.RadSelect = [];
 opt.RectSelect = [];
 opt.DepthRange = [];
+opt.UnsatRange = [];
+opt.Wt2tRange = [];
 opt.ScreenLenRange = [];
 opt.SourceArea = [];
 

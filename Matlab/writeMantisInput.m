@@ -70,6 +70,14 @@ if ~isempty(opt.urfType)
     fprintf(fid, 'urfType %s\n', opt.urfType);
 end
 
+if ~isempty(opt.ADELR)
+    fprintf(fid, 'ADELR %.5e %.5e\n', opt.ADELR);
+end
+
+if ~isempty(opt.initConcParam)
+    fprintf(fid, 'initConcParam %.5e %.5e %5e %5e\n', opt.initConcParam);
+end
+
 % -----------------
 % Filter Options
 % -----------------
@@ -81,6 +89,12 @@ if ~isempty(opt.RectSelect)
 end
 if ~isempty(opt.DepthRange)
     fprintf(fid, 'DepthRange %.2f %.2f\n', opt.DepthRange);
+end
+if ~isempty(opt.UnsatRange)
+    fprintf(fid, 'UnsatRange %.2f %.2f\n', opt.UnsatRange);
+end
+if ~isempty(opt.Wt2tRange)
+    fprintf(fid, 'Wt2tRange %.2f %.2f\n', opt.Wt2tRange);
 end
 if ~isempty(opt.ScreenLenRange)
     fprintf(fid, 'ScreenLenRange %.2f %.2f\n', opt.ScreenLenRange);
