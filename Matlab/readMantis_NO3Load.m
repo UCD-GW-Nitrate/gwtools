@@ -9,8 +9,12 @@ dot_pos = find(filename == '.');
 ext = filename((dot_pos(end)+1):end);
 
 if strcmp(ext,'h5')
-
+    LDinfo = h5info(filename);
+    for ii = 1:length(LDinfo.Datasets)
+        LD.(LDinfo.Datasets(ii).Name) = h5read(LDinfo.Filename,[LDinfo.Name,LDinfo.Datasets(ii).Name]);
+    end
 elseif strcmp(ext,'idxlu') || strcmp(ext,'nload')
+    error('Not Implemented yet')
     prefix = filename(1:dot_pos(end));
     
 
