@@ -49,6 +49,9 @@ end
 if ~isempty(opt.maxConc)
     fprintf(fid, 'maxConc %.2f\n', opt.maxConc);
 end
+if ~isempty(opt.maxAge)
+    fprintf(fid, 'maxAge %.2f\n', opt.maxAge);
+end
 if ~isempty(opt.constRed)
     fprintf(fid, 'constRed %.3f\n', opt.constRed);
 end
@@ -125,6 +128,11 @@ end
 if ~isempty(opt.getids)
     if opt.getids ~= 0
         fprintf(fid, 'getids 1\n');
+        if ~isempty(opt.getOtherInfo)
+            if opt.getOtherInfo ~= 0
+                fprintf(fid, 'getotherinfo 1\n');
+            end
+        end
     end
 end
 if ~isempty(opt.DebugID)

@@ -50,6 +50,7 @@ opt.Crops = [];
 opt.minRch = []; %10;
 opt.rchMap = '';
 opt.maxConc = []; %250;
+opt.maxAge = []; %400;
 opt.constRed = []; %1.0;
 opt.LoadTransitionName = ''; %'GNLM';
 opt.LoadTransitionStart = []; %2035;
@@ -83,6 +84,7 @@ opt.modifierUnit = '';
 % Misc Options
 % -----------------
 opt.getids = [];
+opt.getOtherInfo = [];
 opt.DebugID = [];
 opt.printLF = [];
 opt.printURF = [];
