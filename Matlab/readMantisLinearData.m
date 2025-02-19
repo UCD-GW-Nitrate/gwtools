@@ -2,7 +2,10 @@ function LD = readMantisLinearData(filename)
 %readMantisLinearData read the data from the linear data format
 C = strsplit(filename,'.');
 if strcmp(C{end},'h5')
-
+    LDinfo = h5info(filename);
+    for ii = 1:length(LDinfo.Datasets)
+        LD.(LDinfo.Datasets(ii).Name) = h5read(LDinfo.Filename,[LDinfo.Name,LDinfo.Datasets(ii).Name]);
+    end
 else
     fid = fopen(filename,'r');
     Ndata = cell2mat(textscan(fid,'%f',1));
@@ -19,6 +22,4 @@ else
     C = textscan(fid, frmt,'HeaderLines',Ndata+1);
     fclose(fid);
     LD.Data = cell2mat(C);
-end
-
 end
