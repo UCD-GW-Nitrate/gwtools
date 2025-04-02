@@ -46,6 +46,9 @@ if length(TYPE) == 1
 elseif length(TYPE) == 2
     fprintf(fid, '3D\n');
     fprintf(fid, [TYPE{1} ' ' TYPE{2} '\n']);
+else
+    fclose(fid);
+    error("Wrong size of TYPE")
 end
 
 fprintf(fid, '%d %d %d\n', [size(COORDS,1) size(DATA,2), size(TR,1)]);
