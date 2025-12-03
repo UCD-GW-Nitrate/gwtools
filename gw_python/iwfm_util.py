@@ -1,3 +1,4 @@
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Polygon
 
@@ -29,4 +30,16 @@ def mesh_to_gdf(nodes, elements, crs):
     )
 
     return gdf
+
+def get_date_df(start_date, end_date,freq="MS"):
+    c2vs_dates = pd.date_range(start=start_date, end=end_date, freq=freq)
+    c2vs_dates_df = pd.DataFrame({
+        'date': c2vs_dates,
+        'year': c2vs_dates.year,
+        'month': c2vs_dates.month,
+        'days_in_month': c2vs_dates.days_in_month
+    })
+    return c2vs_dates_df
+
+
 
