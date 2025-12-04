@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 def _read_all_file(filename):
     # Read all lines
