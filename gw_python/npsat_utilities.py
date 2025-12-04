@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
 import geopandas as gpd
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString
 
-def read_urf_calc(prefix_filename, nproc, n_strml, por):
+def read_urf_calc(prefix_filename, nproc, n_strml, por, show_progress=False):
     col_names = ['SrcID', 'SrcInd', 'Eid', 'Sid', 'ER',
                  'p_cdsX', 'p_cdsY', 'p_cdsZ', 'v_cds',
                  'p_lndX', 'p_lndY', 'Len']
@@ -15,6 +15,8 @@ def read_urf_calc(prefix_filename, nproc, n_strml, por):
     for ii in range(nproc):
         fname = prefix_filename + f"{ii}.dat"
         #print("update2")
+        if show_progress:
+            print(f"Reading {fname}")
         df = pd.read_table(fname, sep=',', index_col=False)
         df.columns = df.columns.str.strip()
 
@@ -201,3 +203,36 @@ def read_mesh(filename):
 
     return {'nodes': nodes,
             'elements':elements}
+
+def polygon_to_avg_line(gdf):
+    """
+    From a polygon GeoDataFrame, create a new line GeoDataFrame where:
+    - First point = average of vertices 0 and 3
+    - Second point = average of vertices 1 and 2
+    """
+
+    new_geoms = []
+
+    for idx, row in gdf.iterrows():
+        poly = row.geometry
+        exterior = list(poly.exterior.coords)
+
+        if len(exterior) < 4:
+            raise ValueError(f"Polygon at index {idx} has fewer than 4 vertices.")
+
+        # Extract first 4 vertices
+        p0 = exterior[0]
+        p1 = exterior[1]
+        p2 = exterior[2]
+        p3 = exterior[3]
+
+        # Compute averages
+        avg03 = ((p0[0] + p3[0]) / 2, (p0[1] + p3[1]) / 2)
+        avg12 = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+
+        # Create line
+        line = LineString([avg03, avg12])
+        new_geoms.append(line)
+
+    # Build new GeoDataFrame
+    return gpd.GeoDataFrame(geometry=new_geoms, crs=gdf.crs)
