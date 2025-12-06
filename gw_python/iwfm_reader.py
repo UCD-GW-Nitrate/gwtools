@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import re
 
 def _read_all_file(filename):
     # Read all lines
@@ -197,3 +198,88 @@ def read_VELOUTFILE(filename: str, Nstep: int, Nelem: int, Nlay: int):
         idx += 1
 
     return {"CC": CC, "VX": VX, "VY": VY, "VZ": VZ}
+
+def read_gw_head(filename):
+
+    with open(filename, "r") as f:
+        lines = f.readlines()
+
+    # --- Identify timestamp lines (they start with MM/DD/YYYY_24:00) ---
+    #ts_pattern = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})_24:00")
+    ts_pattern = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})_24:00(.*)$")
+    #ts_indices = [i for i, ln in enumerate(lines) if ts_pattern.match(ln)]
+    ts_indices = []
+    timestamps = []
+    for i, ln in enumerate(lines):
+        m = ts_pattern.match(ln)
+        if m:
+            ts_indices.append(i)
+            mm, dd, yyyy, ss = m.groups()
+            timestamps.append((int(dd), int(mm), int(yyyy)))
+
+    Nsteps = len(ts_indices)
+    if Nsteps == 0:
+        raise ValueError("No valid time-step lines found.")
+
+    timestamps = pd.DataFrame(timestamps, columns=["D", "M", "Y"])
+
+    # Detect Nlay and Nnodes from the FIRST timestep
+    first_ts = ts_indices[0]
+    first_line = lines[first_ts]
+    m = ts_pattern.match(first_line)
+    tail = m.group(4).strip()
+    if not tail:
+        raise ValueError("First timestep line does not contain numeric data.")
+    Nnodes = len(tail.split())
+
+    Nlay = 1
+    # Auxiliary
+    def is_comment(s):
+        return s.lstrip().startswith("*")
+    #comment = lambda s: s.lstrip().startswith("*")
+
+    j = first_ts + 1
+    while j < len(lines):
+        ln = lines[j].strip()
+        if not ln or is_comment(ln):
+            j += 1
+            continue
+        if ts_pattern.match(ln):
+            break
+        Nlay += 1
+        j += 1
+
+    if Nlay == 0:
+        raise ValueError("Could not detect number of layers (Nlay).")
+
+    # --- Allocate output array ---
+    heads = np.zeros((Nnodes, Nsteps, Nlay), dtype=float)
+
+    # --- Parse each timestep ---
+    for step_idx, idx in enumerate(ts_indices):
+        row_start = idx
+        lay_counter = 0
+        # read next Nlay numeric rows
+        while lay_counter < Nlay and row_start < len(lines):
+            ln = lines[row_start].strip()
+
+            if ln and not is_comment(ln):
+                if lay_counter == 0:
+                    m = ts_pattern.match(ln)
+                    if m:
+                        mm, dd, yyyy, ln = m.groups()
+                arr = np.fromstring(ln, sep=' ')
+                #arr = np.array([float(x) for x in ln.strip().split()], dtype=float)
+                if arr.size != Nnodes:
+                    raise ValueError(
+                        f"Row {row_start} has {arr.size} values but expected {Nnodes}"
+                    )
+                heads[:, step_idx, lay_counter] = arr
+                lay_counter += 1
+
+            row_start += 1
+
+        if lay_counter != Nlay:
+            raise ValueError(f"Time step {step_idx} ended prematurely.")
+
+    return heads, timestamps

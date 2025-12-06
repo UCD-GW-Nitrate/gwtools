@@ -49,3 +49,4 @@ def plot_shape_and_nodes(gdf, i, ax=None):
     ax.set_title(f"Geometry and Vertex Order for Row {i}")
     ax.set_aspect('equal')
     return ax
+
