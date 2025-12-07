@@ -5,6 +5,10 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from simplify_lines import simplify_to_linestring_3d
 import os
+import configparser
+import subprocess
+import shlex
+import time
 
 def outline_mesh_to_domain_file(gdf, filename):
     if len(gdf) == 0:
@@ -298,6 +302,7 @@ def config_main(xyz_type="CLOUD",method="Euler"):
     data = {
         "Velocity": {
             "XYZType": f"{xyz_type}",
+            "Type": "DETRM",
             "ConfigFile": ""
         },
 
@@ -403,6 +408,61 @@ def config_vel(xyz_type="CLOUD"):
 
 
     return data
+
+def run_ichnos(filename_prefix, main_config_data, vel_config_data, ichnos_exe):
+    config_main = configparser.ConfigParser()
+    config_main.read_dict(main_config_data)
+
+    main_ini = f"{filename_prefix}_main.ini"
+    vel_ini = f"{filename_prefix}_vel.ini"
+
+    main_config_data['Velocity']['ConfigFile'] = vel_ini
+
+    config_vel = configparser.ConfigParser()
+    config_vel.read_dict(vel_config_data)
+
+    with open(main_ini, "w") as f:
+        config_main.write(f)
+
+    with open(vel_ini, "w") as f:
+        config_vel.write(f)
+
+    # shlex.quote ensures correct quoting on Windows/Linux
+    cmd = f"{shlex.quote(ichnos_exe)} -c {shlex.quote(main_ini)}"
+    print(f"\n▶ Running Ichnos:\n{cmd}\n")
+    start_time = time.time()
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        shell=True,
+        bufsize=1
+    )
+
+    output_log = []  # store for error reporting
+    for line in process.stdout:
+        print(line, end="")  # live stream
+        output_log.append(line)  # save for errors
+
+    process.wait()
+    elapsed = time.time() - start_time
+    print(f"\n⏱ Ichnos finished in {elapsed:.2f} seconds.")
+
+    cmd = f"{ichnos_exe} -c {filename_prefix}_main.ini"
+    with open(os.devnull, 'w') as null:
+        subprocess.call(cmd, stdout=null, stderr=null)
+
+    if process.returncode != 0:
+        full_output = "".join(output_log)
+        raise RuntimeError(
+            f"Ichnos execution failed with return code {process.returncode}.\n"
+            f"Output:\n{full_output}"
+        )
+
+    return True
+
 
 
 
