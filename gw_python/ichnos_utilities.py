@@ -294,6 +294,116 @@ def map_elem_nodes_to_rows(nodes_df, elem_df):
 
     return elem_mapped
 
+def config_main(xyz_type="CLOUD",method="Euler"):
+    data = {
+        "Velocity": {
+            "XYZType": f"{xyz_type}",
+            "ConfigFile": ""
+        },
+
+        "Domain": {
+            "Outline": "",
+            "TopFile": "",
+            "BottomFile": "",
+            "ProcessorPolys": ""
+        },
+
+        "StepConfig": {
+            "Method": f"{method}",
+            "Direction": 1,
+            "StepSize": 50,
+            "StepSizeTime": 100000,
+            "nSteps": 1,
+            "nStepsTime": 0,
+            "minExitStepSize": 1
+        },
+
+        "StoppingCriteria": {
+            "MaxIterationsPerStreamline": 3000,
+            "MaxProcessorExchanges": 50,
+            "AgeLimit": -1,
+            "StuckIter": 10,
+            "AttractFile": "",
+            "AttractRadius": 30
+        },
+
+        "InputOutput": {
+            "ParticleFile": "",
+            "WellFile": "",
+            "OutputFile": "",
+            "PrintH5": 0,
+            "PrintASCII": 1,
+            "ParticlesInParallel": 5000,
+            "GatherOneFile": 0
+        },
+        "Other": {
+            "Version": "0.5.07",
+            "Nrealizations": 1,
+            "nThreads": 1,
+            "RunAsThread": 1,
+            "OutFreq": 10
+        }
+    }
+
+    if method == "RK45":
+        data["AdaptStep"] = {
+            "MaxStepSize": 1000,
+            "MinStepSize": 0.1,
+            "IncreaseRateChange": 1.5,
+            "LimitUpperDecreaseStep": 0.15,
+            "Tolerance" : 1
+        }
+    if method == "PECE":
+        data["PECE"] = {
+            "Order": 6,
+            "Tolerance": 0.2
+        }
+
+    return data
+
+def config_vel(xyz_type="CLOUD"):
+    data = {
+        "Velocity": {
+            "Prefix": "",
+            "LeadingZeros": 4,
+            "Suffix": ".vel",
+            "Type": "DETRM",
+            "TimeStepFile" : "",
+            "TimeInterp": 1,
+            "RepeatTime": 0,
+            "Multiplier": 1
+        },
+        "Porosity": {
+            "Value": 0.1
+        },
+        "General": {
+            "OwnerThreshold": 0.15,
+            "FrequencyStat": 100
+        }
+    }
+
+    if xyz_type == "MESH2D":
+        data["MESH2D"] = {
+            "NodeFile": "",
+            "MeshFile": "",
+            "ElevationFile": "",
+            "FaceIdFile": "",
+            "Nlayers": 1,
+            "INTERP": "ELEMENT"
+        }
+    if xyz_type == "CLOUD":
+        data["MESH2D"] = {
+            "Scale": 1,
+            "Power": 3,
+            "InitDiameter": 3000,
+            "InitRatio": 20,
+            "GraphPrefix": "",
+            "Threshold": 0.1
+        }
+
+
+    return data
+
 
 
 
