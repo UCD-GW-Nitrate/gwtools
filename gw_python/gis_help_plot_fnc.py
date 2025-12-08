@@ -51,7 +51,7 @@ def plot_shape_and_nodes(gdf, i, ax=None):
     ax.set_aspect('equal')
     return ax
 
-def plot_streamline_and_overlapping_mesh(S_gdf, mesh_gdf, idx, ax=None):
+def plot_streamline_and_overlapping_mesh(S_gdf, mesh_gdf, idx, ax=None, color='blue'):
     selected_lines = S_gdf.iloc[idx]
 
     minx, miny, maxx, maxy = selected_lines.total_bounds
@@ -59,9 +59,9 @@ def plot_streamline_and_overlapping_mesh(S_gdf, mesh_gdf, idx, ax=None):
 
     overlapping_polygons = mesh_gdf[mesh_gdf.intersects(bbox)]
 
-    overlapping_polygons.plot(ax=ax, facecolor="none", edgecolor="orange", linewidth=0.5)
+    overlapping_polygons.plot(ax=ax, facecolor="none", edgecolor="black", linewidth=0.5)
 
-    selected_lines.plot(ax=ax, color="blue", linewidth=2)
+    selected_lines.plot(ax=ax, color=color, linewidth=2)
 
     #gpd.GeoSeries([bbox]).plot(ax=ax, facecolor="none", edgecolor="red", linestyle="--")
 
