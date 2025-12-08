@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import numpy as np
 import re
@@ -283,3 +284,144 @@ def read_gw_head(filename):
             raise ValueError(f"Time step {step_idx} ended prematurely.")
 
     return heads, timestamps
+
+
+def read_iwfm_tecplot_velocity(filename, Nnodes, Nlay, Ntimes, alloc_mult=2.5):
+    Ntotal = Nnodes * Nlay
+    VX = np.zeros((Ntotal, Ntimes), dtype=np.float64)
+    VY = np.zeros((Ntotal, Ntimes), dtype=np.float64)
+    VZ = np.zeros((Ntotal, Ntimes), dtype=np.float64)
+
+    max_elem = int(alloc_mult * Nnodes)
+    elem = np.zeros((max_elem, 4), dtype=np.int32)
+    nodeXY = np.zeros((Nnodes, 2), dtype=np.float64)
+
+    nan_list = []
+
+    with open(filename, "r") as f:
+        for line in f:
+            if line.startswith("ZONE"):
+                break
+
+        n_read = 0
+        for line in f:
+            if line.startswith("T") or line.startswith("Z"):
+                break
+                # reached next section prematurely (should not happen)
+
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+
+            # Parse only X, Y (first two values)
+            nodeXY[n_read, 0] = float(parts[0])
+            nodeXY[n_read, 1] = float(parts[1])
+
+            n_read += 1
+            if n_read >= Nnodes:
+                break  # finished reading node coordinates
+
+        # --- Read elements until TEXT ---
+        e_read = 0
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue  # skip empty line
+            if stripped.startswith("TEXT"):
+                break  # end of element list
+
+            parts = stripped.split()
+            if len(parts) == 4:
+                try:
+                    elem[e_read, 0] = int(parts[0])
+                    elem[e_read, 1] = int(parts[1])
+                    elem[e_read, 2] = int(parts[2])
+                    elem[e_read, 3] = int(parts[3])
+                    e_read += 1
+                except ValueError:
+                    continue  # skip malformed numeric lines
+
+                if e_read >= max_elem:
+                    raise RuntimeError(
+                        f"Element count exceeded allocated size {max_elem}. "
+                        f"Increase the multiplier alloc_mult {alloc_mult}."
+                    )
+
+        elem = elem[:e_read, :]
+
+        # --- Read velocities for all timesteps ---
+        timestep = 0
+        n_fixed = 0
+        while timestep < Ntimes:
+            # Move to next ZONE line
+            for line in f:
+                if line.startswith("ZONE"):
+                    break
+            #else:
+            #    raise RuntimeError("Unexpected end of file while seeking ZONE.")
+
+            # Read exactly Ntotal*3 floats for this timestep
+            values = []
+            while len(values) < Ntotal * 3:
+                line = f.readline()
+                if not line:
+                    raise EOFError("Unexpected end of file while reading velocities")
+                stripped = line.strip()
+                if stripped.startswith(("TEXT", "ZONE")) or not stripped:
+                    continue
+
+                #  Parse floats, handle ************
+                # This is ok if there are no ************ values
+                #values.extend([float(x) for x in stripped.split()])
+                for x in stripped.split():
+                    try:
+                        values.append(float(x))
+                    except:
+                        values.append(np.nan)
+                        # Determine inode, ilay
+                        idx = len(values) - 1
+                        ilay = idx // Nnodes % Nlay
+                        inode = idx % Nnodes
+                        nan_list.append((inode, ilay, timestep))
+
+            # For each variable block in order:
+            #   VX_L1, VY_L1, VZ_L1, VX_L2, VY_L2, ...
+            #
+            # We fill:
+            #   VX[layer*Nnodes : (layer+1)*Nnodes, t]
+            #   VY[...]
+            #   VZ[...]
+            #
+            # BLOCK order is variable-major, not node-major.
+            # ----------------------------------------------------------
+            values = np.array(values[:Ntotal*3], dtype=np.float64)
+            VX[:, timestep] = values[0:Ntotal]
+            VY[:, timestep] = values[Ntotal:2*Ntotal]
+            VZ[:, timestep] = values[2*Ntotal:3*Ntotal]
+
+            for ilay in range(Nlay):
+                start = ilay * Nnodes
+                stop = start + Nnodes
+                for arr in (VX, VY, VZ):
+                    layer_vals = arr[start:stop, timestep]
+                    max_val = np.nanmax(layer_vals)
+                    nan_mask = np.isnan(layer_vals)
+                    n_fix_layer = np.sum(nan_mask)
+                    if n_fix_layer > 0:
+                        layer_vals[nan_mask] = max_val
+                        n_fixed += n_fix_layer
+
+            timestep += 1
+            # --- Simple progress bar ---
+            bar_len = 40
+            fraction = timestep / Ntimes
+            filled_len = int(bar_len * fraction)
+            bar = "=" * filled_len + "-" * (bar_len - filled_len)
+            sys.stdout.write(f"\rReading velocities: [{bar}] {timestep}/{Ntimes}")
+            sys.stdout.flush()
+
+        print("\nDone reading velocities.")
+        if n_fixed > 0:
+            print(f"[{n_fixed}] ************ values found, replaced by layer max.")
+
+    return nodeXY, elem, VX, VY, VZ, nan_list
