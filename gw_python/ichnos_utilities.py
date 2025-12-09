@@ -133,6 +133,7 @@ def read_ichnos_traj(filepath: str) -> pd.DataFrame:
         "Ye": [],
         "Vs": [],
         "Ve": [],
+        "Ae": []
     }
 
     # Initialize variables for block processing
@@ -174,6 +175,7 @@ def read_ichnos_traj(filepath: str) -> pd.DataFrame:
                         S["P"].append(p_array)
                         S["V"].append(v_array)
                         S["Age"].append(age_array)
+                        S["Ae"].append(age_array[-1])
                         S["Xs"].append(p_array[0, 0])
                         S["Ys"].append(p_array[0, 1])
                         S["Xe"].append(p_array[-1, 0])
