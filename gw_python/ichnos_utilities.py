@@ -9,6 +9,7 @@ import configparser
 import subprocess
 import shlex
 import time
+from typing import Dict, Any, List, Tuple, Union
 
 def outline_mesh_to_domain_file(gdf, filename):
     if len(gdf) == 0:
@@ -464,6 +465,80 @@ def run_ichnos(filename_prefix, main_config_data, vel_config_data, ichnos_exe):
         )
 
     return True
+
+
+def read_ichnos_elev(filename: str) -> Dict[str, Any]:
+    Elev: Dict[str, Any] = {}
+    try:
+        with open(filename, 'r') as f:
+            # 1. Create a line iterator for clean, sequential reading
+            lines_iterator = iter(f.readlines())
+
+            # --- Read the interpolation type (Elev.Type) ---
+            try:
+                # Read the first line
+                current_line = next(lines_iterator).strip()
+                while not current_line and lines_iterator:
+                    current_line = next(lines_iterator).strip()
+                if not current_line:
+                    raise ValueError(f"File {filename} is empty or contains no data lines.")
+
+                Elev['Type'] = current_line.split()[0].upper()  # Read the first word and capitalize
+            except StopIteration:
+                raise ValueError("Could not read interpolation type from file.")
+
+            # --- Handle different types ---
+            if Elev['Type'] == 'CLOUD':
+                # --- Read parameters R and P ---
+                try:
+                    current_line = next(lines_iterator).strip()
+                    while not current_line and lines_iterator:
+                        current_line = next(lines_iterator).strip()
+
+                    params = [float(x) for x in current_line.split()]
+                    if len(params) < 2:
+                        raise ValueError("CLOUD type requires at least 2 parameters (R, P).")
+                    Elev['R'] = params[0]
+                    Elev['P'] = params[1]
+                except StopIteration:
+                    # R, P data was expected but file ended
+                    raise ValueError("File ended unexpectedly while reading CLOUD parameters (R, P).")
+                except ValueError as e:
+                    # Non-float data or split error
+                    raise ValueError(f"Error parsing CLOUD parameters (R, P): {e}")
+
+                # --- Read Data points (Elev.Data) ---
+                pp: List[List[float]] = []
+                while True:
+                    try:
+                        current_line = next(lines_iterator).strip()
+                        # Stop if line is empty (matches MATLAB's `isempty(lines{idx,1})`)
+                        if not current_line:
+                            break
+
+                        # Read all floats in the line
+                        data_row = [float(x) for x in current_line.split()]
+                        pp.append(data_row)
+
+                    except StopIteration:
+                        # File ended (matches MATLAB's `if idx > length(lines)`)
+                        break
+                    except ValueError as e:
+                        # Skip or report invalid data lines if necessary
+                        warnings.warn(f"Skipping line with invalid float data: '{current_line.strip()}'. Error: {e}")
+
+                # Convert list of lists to a NumPy array for efficiency and matrix-like structure
+                Elev['Data'] = np.array(pp)
+            elif Elev['Type'] == 'MESH2D':
+                warnings.warn('Reading MESH2D is not implemented yet in this function.')
+            else:
+                warnings.warn(f"Unknown elevation type: {Elev['Type']}. Data reading skipped.")
+
+    except FileNotFoundError:
+        print(f"Error: File not found at path: {filename}")
+        raise
+
+    return Elev
 
 
 
