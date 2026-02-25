@@ -43,7 +43,7 @@ def mantis_inputs():
         'maxConc' : None, #250;
         'maxAge' : None, #400;
         'constRed' : None, #1.0;
-        'LoadTransitionName' : None, #'GNLM';
+        'LoadTransitionName' : None, #'NONE';
         'LoadTransitionStart' : None, #2035;
         'LoadTransitionEnd' : None, #2025;
         'startSimYear' : None, #1945;
@@ -51,6 +51,10 @@ def mantis_inputs():
         'urfType' : None, #'LGNRM' or 'ADE';
         'ADELR' : None,
         'initConcParam' : None, #mean std min max
+        'surfConc' : None, # 0
+        'surfRivDist' : None, # 50
+        'surfRivInfl' : None, # 200
+        
 
         # -----------------
         # Filter options
@@ -186,6 +190,15 @@ def write_mantis_input(scenario: dict):
         if scenario.get("initConcParam") is not None:
             vals = scenario["initConcParam"]
             f.write(f"initConcParam {vals[0]:.5e} {vals[1]:.5e} {vals[2]:.5e} {vals[3]:.5e}\n")
+
+        if scenario.get("surfConc") is not None:
+            f.write(f"surfConc {scenario['surfConc']:.2f}\n")
+
+        if scenario.get("surfRivDist") is not None:
+            f.write(f"surfRivDist {scenario['surfRivDist']:.2f}\n")
+
+        if scenario.get("surfRivInfl") is not None:
+            f.write(f"surfRivInfl {scenario['surfRivInfl']:.2f}\n")
 
         # -----------------
         # Filter Options
