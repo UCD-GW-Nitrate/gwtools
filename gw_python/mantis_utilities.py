@@ -424,3 +424,46 @@ def read_linear_data(filename):
             data = data.reshape(1, -1)
 
     return names, data
+
+def read_raster(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".h5":
+
+        with h5py.File(filename, "r") as f:
+            if 'Raster' not in f:
+                raise KeyError("Dataset 'Raster' not found in HDF5 file.")
+            #data = f['Raster'][()]
+            data = np.array(f["Raster"]).T
+
+    else:
+        data = np.loadtxt(filename)
+        if data.ndim != 2 or data.shape[1] != 2:
+            raise ValueError("ASCII file must contain exactly two columns.")
+
+    return data
+
+def linear_to_raster(linear_data, idx, nrow, ncol):
+    out = np.full((nrow, ncol), np.nan)
+    # Faster vectorized version
+    out[idx[:, 0], idx[:, 1]] = linear_data
+
+    # # Assign values
+    # for i in range(linear_data.shape[0]):
+    #     r, c = idx[i]
+    #     out[r, c] = linear_data[i]
+
+    return out
+
+def convert_raster_to_column(raster):
+    rows, cols = np.where(raster >= 0)
+    values = raster[rows, cols]
+
+    order = np.argsort(values)
+
+    return np.column_stack((rows[order], cols[order]))
+
+def convert_column_to_raster(raster_column, shape, fill_value=-1):
+    raster = np.full(shape, fill_value, dtype=int)
+    for i, (r, c) in enumerate(raster_column):
+        raster[r, c] = i
+    return raster

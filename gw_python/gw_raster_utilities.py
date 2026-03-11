@@ -48,3 +48,28 @@ def clip_raster_to_poly(raster_file_name, poly):
         })
 
     return A_raster_clipped, R_raster_clipped
+
+def write_raster_like_ref(data, filename, ref_raster):
+    with rasterio.open(ref_raster) as ref:
+        meta = ref.meta.copy()
+        ref_height, ref_width = ref.height, ref.width
+
+    # Validate dimensions
+    if data.shape != (ref_height, ref_width):
+        raise ValueError(
+            f"Data shape {data.shape} does not match reference raster "
+            f"shape ({ref_height}, {ref_width})."
+        )
+
+    # Update metadata
+    meta.update({
+        "count": 1,
+        "height": ref_height,
+        "width": ref_width,
+        "dtype": data.dtype,
+        "nodata": np.nan
+    })
+
+# Write output GeoTIFF
+    with rasterio.open(filename, "w", **meta) as dst:
+        dst.write(data, 1)
