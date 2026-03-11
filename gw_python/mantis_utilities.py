@@ -30,9 +30,9 @@ def mantis_inputs():
         # -----------------
         # Loading options
         # -----------------
-        'loadScen' : 'GNLM',
-        'startRed' : 2020,
-        'endRed' : 2030,
+        'loadScen' : 'NONE',
+        'startRed' : 0,
+        'endRed' : 0,
         'Crops' : None,
 
         # -----------------
