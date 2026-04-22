@@ -2,6 +2,7 @@ import sys
 import pandas as pd
 import numpy as np
 import re
+import h5py
 
 def _read_all_file(filename):
     # Read all lines
@@ -425,3 +426,37 @@ def read_iwfm_tecplot_velocity(filename, Nnodes, Nlay, Ntimes, alloc_mult=2.5):
             print(f"[{n_fixed}] ************ values found, replaced by layer max.")
 
     return nodeXY, elem, VX, VY, VZ, nan_list
+
+
+def read_iwfm_stream_node_budget(filename):
+    with h5py.File(filename, "r") as f:
+        node_entries = []
+
+        for key in f.keys():
+            m = re.match(r"NODE\s+(\d+)$", key)
+            if m:
+                node_id = int(m.group(1))
+                node_entries.append((node_id, key))
+
+        node_entries.sort(key=lambda x: x[0])
+
+        node_ids = []
+        data = []
+        data_by_node = {}
+
+        for node_id, key in node_entries:
+            arr = f[key][()]
+            node_ids.append(node_id)
+            data.append(arr)
+            data_by_node[node_id] = arr
+
+
+    bud = {
+        "NodeIDs": node_ids,
+        "Data": data,
+        "DataByNode": data_by_node
+    }
+
+    return bud
+
+
