@@ -459,4 +459,82 @@ def read_iwfm_stream_node_budget(filename):
 
     return bud
 
+def stream_spec(filename):
+    """
+    Read IWFM-style stream specification file.
+
+    Skips lines starting with '#' or 'C'.
+
+    Returns
+    -------
+    streams : dict
+        streams[ID] = {
+            "ID": ID,
+            "IBUR": IBUR,
+            "IBDR": IBDR,
+            "NAME": NAME,
+            "IRV": [...],
+            "IGW": [...]
+        }
+
+    meta : dict
+        {"NHR": NHR, "NRTB": NRTB}
+    """
+
+    def valid_lines():
+        with open(filename, "r") as f:
+            for line in f:
+                s = line.strip()
+
+                if not s:
+                    continue
+
+                if s.startswith("#") or s.startswith("C"):
+                    continue
+
+                yield s
+
+    lines = valid_lines()
+
+    NHR = int(next(lines).split()[0])
+    NRTB = int(next(lines).split()[0])
+
+    streams = {}
+
+    for _ in range(NHR):
+        # Header line: ID IBUR IBDR NAME
+        parts = next(lines).split()
+
+        ID = int(parts[0])
+        IBUR = int(parts[1])
+        IBDR = int(parts[2])
+
+        # Everything after the first 3 fields is the name
+        NAME = " ".join(parts[3:])
+
+        IRV = []
+        IGW = []
+
+        for _ in range(IBUR):
+            parts = next(lines).split()
+
+            IRV.append(int(parts[0]))
+            IGW.append(int(parts[1]))
+
+        streams[ID] = {
+            "ID": ID,
+            "IBUR": IBUR,
+            "IBDR": IBDR,
+            "NAME": NAME,
+            "IRV": IRV,
+            "IGW": IGW
+        }
+
+    meta = {
+        "NHR": NHR,
+        "NRTB": NRTB
+    }
+
+    return streams, meta
+
 
