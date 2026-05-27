@@ -2,6 +2,8 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
 from shapely.geometry import box
+import matplotlib.tri as mtri
+import numpy as np
 
 def plot_shape_and_nodes(gdf, i, ax=None):
     """
@@ -67,3 +69,54 @@ def plot_streamline_and_overlapping_mesh(S_gdf, mesh_gdf, idx, ax=None, color='b
 
     #ax.set_title("Selected LineStrings and Overlapping Mesh Polygons", fontsize=14)
     ax.set_aspect("equal")
+
+def plot_triangulation(ax, xy_nodes, tri_ids,
+                           linewidth=0.5,
+                           color="k",
+                           show_nodes=False,
+                           node_size=2):
+        """
+        Plot triangulation on an existing matplotlib axis.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            Existing axis.
+        xy_nodes : np.ndarray
+            Node coordinates with shape (Nnodes, 2).
+        tri_ids : np.ndarray
+            Triangle connectivity array with shape (Ntri, 3).
+        linewidth : float
+            Triangle edge width.
+        color : str
+            Triangle edge color.
+        show_nodes : bool
+            If True, also plot nodes.
+        node_size : float
+            Node marker size.
+        """
+
+        xy_nodes = np.asarray(xy_nodes)
+        tri_ids = np.asarray(tri_ids)
+
+        triang = mtri.Triangulation(
+            xy_nodes[:, 0],
+            xy_nodes[:, 1],
+            tri_ids
+        )
+
+        ax.triplot(
+            triang,
+            linewidth=linewidth,
+            color=color
+        )
+
+        if show_nodes:
+            ax.scatter(
+                xy_nodes[:, 0],
+                xy_nodes[:, 1],
+                s=node_size,
+                color=color
+            )
+
+        ax.set_aspect("equal")

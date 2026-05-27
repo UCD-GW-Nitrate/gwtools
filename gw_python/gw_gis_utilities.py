@@ -1,5 +1,7 @@
 import pandas as pd
 import geopandas as gpd
+import numpy as np
+from scipy.spatial import Delaunay
 
 def assign_fields_from_polygons_to_points(points: pd.DataFrame, polygons: gpd.GeoDataFrame,
                                           fields_to_copy: list, point_crs: str = "EPSG:3310",
@@ -49,3 +51,58 @@ def assign_fields_from_polygons_to_points(points: pd.DataFrame, polygons: gpd.Ge
         joined = joined.drop_duplicates(subset=gdf_points.columns.tolist())
 
     return joined.reset_index(drop=True)
+
+def triangulate_inside_outline(outline_gdf, node_gdf):
+    """
+    Keep point nodes inside outline_gdf, triangulate them, then remove
+    triangles whose barycenters fall outside outline_gdf.
+
+    Returns
+    -------
+    node_gdf_new : geopandas.GeoDataFrame
+        Filtered node GeoDataFrame with original fields preserved.
+
+    tri_ids_new : np.ndarray
+        Triangle connectivity using the new node_gdf_new row order,
+        shape (Ntri, 3).
+    """
+
+    outline_geom = outline_gdf.geometry.union_all()
+
+    # Keep points inside or on outline
+    keep_nodes = (
+        node_gdf.geometry.within(outline_geom) |
+        node_gdf.geometry.touches(outline_geom)
+    )
+
+    node_gdf_new = node_gdf.loc[keep_nodes].copy().reset_index(drop=True)
+
+    if len(node_gdf_new) < 3:
+        return node_gdf_new, np.empty((0, 3), dtype=int)
+
+    # Extract X/Y from point geometry, including POINT Z
+    xy_nodes = np.column_stack([
+        node_gdf_new.geometry.x.to_numpy(),
+        node_gdf_new.geometry.y.to_numpy()
+    ])
+
+    # Triangulate retained nodes
+    tri = Delaunay(xy_nodes)
+    tri_ids_all = tri.simplices.copy()
+
+    # Remove triangles with barycenters outside outline
+    barycenters = xy_nodes[tri_ids_all].mean(axis=1)
+
+    bary_points = gpd.GeoSeries(
+        gpd.points_from_xy(barycenters[:, 0], barycenters[:, 1]),
+        crs=node_gdf.crs
+    )
+
+    keep_tri = (
+        bary_points.within(outline_geom) |
+        bary_points.touches(outline_geom)
+    )
+
+    tri_ids_new = tri_ids_all[np.asarray(keep_tri)]
+
+    return node_gdf_new, tri_ids_new
