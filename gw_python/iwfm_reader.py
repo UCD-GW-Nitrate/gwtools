@@ -537,6 +537,73 @@ def stream_spec(filename):
 
     return streams, meta
 
+# Function to read C2VSim Crop areas
+def read_iwfm_crop_area(filename, ntimes, nelem, ncrops, nskip, print_progress=False):
+    """
+    Reads IWFM crop area data per element.
+
+    Python equivalent of:
+        CropAreas = readIWFM_CropArea(filename, Ntimes, Nelem, Ncrops, Nskip)
+
+    Returns
+    -------
+    crop_areas : dict
+        crop_areas["Data"] : list of length ntimes
+            Each entry is a (nelem, ncrops + 1) numpy array.
+        crop_areas["YMD"] : ndarray
+            Array of shape (ntimes, 3), with columns [year, month, day].
+    """
+
+    with open(filename, "r") as f:
+        lines = f.read().splitlines()
+
+    current_line = nskip
+
+    crop_areas = {
+        "Data": [None] * ntimes,
+        "YMD": np.zeros((ntimes, 3), dtype=int),
+    }
+
+    for ii in range(ntimes):
+        parts = lines[current_line].split()
+
+        # First token is assumed to be something like MM/DD/YYYY_...
+        date_token = parts[0]
+        date_part = date_token.split("_")[0]
+        month, day, year = map(int, date_part.split("/"))
+
+        if print_progress:
+            print(date_token)
+
+        crop_areas["YMD"][ii, :] = [year, month, day]
+
+        # Remaining values on first line
+        values = [float(x) for x in parts[1:] if _is_float(x)]
+
+        arr = np.zeros((nelem, ncrops + 1), dtype=float)
+        arr[0, :] = values
+
+        current_line += 1
+
+        for j in range(1, nelem):
+            parts = lines[current_line].split()
+
+            values = [float(x) for x in parts if _is_float(x)]
+            arr[j, :] = values
+
+            current_line += 1
+
+        crop_areas["Data"][ii] = arr
+
+    return crop_areas
+
+
+def _is_float(x):
+    try:
+        float(x)
+        return True
+    except ValueError:
+        return False
 
 # Function to read C2VSim Crop areas
 def read_iwfm_crop_area(filename, ntimes, nelem, ncrops, nskip, print_progress=False):

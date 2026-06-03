@@ -5,6 +5,8 @@ from rasterio.vrt import WarpedVRT
 from rasterio.enums import Resampling
 from rasterio.mask import mask
 from rasterio.features import rasterize
+from rasterio.transform import from_origin
+from rasterio.crs import CRS
 from pathlib import Path
 
 
@@ -79,32 +81,41 @@ def write_raster_like_ref(data, filename, ref_raster):
 def rasterize_gdf_field(
     gdf,
     field,
-    template_raster,
+    grid_info,
     out_raster,
     nodata=-9999.0,
     all_touched=False,
     dtype="float32",
 ):
     """
-    Rasterize one GeoDataFrame field using the grid, transform, and CRS
-    of a template raster.
+    Rasterize one GeoDataFrame field using grid information from a dictionary.
 
-    The GeoDataFrame and template raster are expected to use the same CRS.
+    Expected grid_info keys:
+        x_origin, y_origin, cellsize_x, cellsize_y, nrows, ncols
+
+    The output raster CRS is taken from gdf.crs.
     """
 
-    template_raster = Path(template_raster)
     out_raster = Path(out_raster)
 
-    with rasterio.open(template_raster) as src:
-        meta = src.meta.copy()
-        transform = src.transform
-        out_shape = (src.height, src.width)
-        template_crs = src.crs
+    if gdf.crs is None:
+        raise ValueError("Input GeoDataFrame has no CRS defined.")
 
-    if gdf.crs != template_crs:
-        raise ValueError(
-            f"CRS mismatch: gdf.crs={gdf.crs}, template_crs={template_crs}"
-        )
+    x_origin = grid_info["x_origin"]
+    y_origin = grid_info["y_origin"]
+    cellsize_x = grid_info["cellsize_x"]
+    cellsize_y = grid_info["cellsize_y"]
+    nrows = grid_info["nrows"]
+    ncols = grid_info["ncols"]
+
+    transform = from_origin(
+        x_origin,
+        y_origin,
+        cellsize_x,
+        cellsize_y,
+    )
+
+    out_shape = (nrows, ncols)
 
     shapes = (
         (geom, value)
@@ -121,13 +132,17 @@ def rasterize_gdf_field(
         all_touched=all_touched,
     )
 
-    meta.update({
+    meta = {
         "driver": "GTiff",
+        "height": nrows,
+        "width": ncols,
         "count": 1,
         "dtype": dtype,
+        "crs": gdf.crs,
+        "transform": transform,
         "nodata": nodata,
         "compress": "lzw",
-    })
+    }
 
     out_raster.parent.mkdir(parents=True, exist_ok=True)
 
@@ -135,3 +150,108 @@ def rasterize_gdf_field(
         dst.write(arr, 1)
 
     return arr
+
+def get_raster_grid_info(raster_file):
+    """
+    Read basic grid information from a raster.
+
+    Returns
+    -------
+    dict
+        {
+            "x_origin": float,
+            "y_origin": float,
+            "cellsize_x": float,
+            "cellsize_y": float,
+            "ncols": int,
+            "nrows": int,
+            "xmin": float,
+            "ymin": float,
+            "xmax": float,
+            "ymax": float,
+            "crs": rasterio.crs.CRS
+        }
+    """
+    raster_file = Path(raster_file)
+
+    with rasterio.open(raster_file) as src:
+        transform = src.transform
+        bounds = src.bounds
+
+        return {
+            "x_origin": transform.c,          # upper-left x
+            "y_origin": transform.f,          # upper-left y
+            "cellsize_x": transform.a,
+            "cellsize_y": abs(transform.e),
+            "ncols": src.width,
+            "nrows": src.height,
+            "xmin": bounds.left,
+            "ymin": bounds.bottom,
+            "xmax": bounds.right,
+            "ymax": bounds.top,
+            "crs": src.crs,
+        }
+
+def read_raster_array(raster_file, masked=False):
+    """
+    Read a raster and return it as a NumPy array.
+
+    Parameters
+    ----------
+    raster_file : str or Path
+    masked : bool, default=False
+        If True, returns a masked array using the raster nodata value.
+
+    Returns
+    -------
+    np.ndarray or np.ma.MaskedArray
+    """
+    raster_file = Path(raster_file)
+
+    with rasterio.open(raster_file) as src:
+        arr = src.read(1, masked=masked)
+
+    return arr
+
+def write_array_like_raster(
+    arr,
+    reference_raster,
+    out_raster,
+    nodata=-9999.0,
+    dtype="float32",
+    compress="lzw",
+    force_crs="EPSG:3310",
+):
+    reference_raster = Path(reference_raster)
+    out_raster = Path(out_raster)
+
+    with rasterio.open(reference_raster) as src:
+        transform = src.transform
+        height = src.height
+        width = src.width
+        profile = src.profile.copy()
+
+    if arr.shape != (height, width):
+        raise ValueError(
+            f"Array shape {arr.shape} does not match reference raster shape "
+            f"({height}, {width})"
+        )
+
+    crs = CRS.from_user_input(force_crs)
+
+    profile.update({
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": dtype,
+        "crs": crs,
+        "transform": transform,
+        "nodata": nodata,
+        "compress": compress,
+    })
+
+    out_raster.parent.mkdir(parents=True, exist_ok=True)
+
+    with rasterio.open(out_raster, "w", **profile) as dst:
+        dst.write(arr.astype(dtype), 1)
