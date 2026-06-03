@@ -607,3 +607,42 @@ def _is_float(x):
         return False
 
 
+def read_conductivity_prop(filename, n_nodes, n_layers, n_lines_skip):
+    cols = ['ID', 'PKH', 'PS', 'PN', 'PV', 'PL']
+    data = []
+
+    with open(filename, 'r') as f:
+        lines = f.readlines()[n_lines_skip:]  # skip header lines
+
+    current_id = None
+    for idx in range(n_nodes):
+        start_idx = idx * n_layers
+        block = lines[start_idx:start_idx + n_layers]
+        if len(block) != n_layers:
+            break
+
+        # First line includes the ID
+        parts = block[0].split()
+        node_id = int(parts[0])
+        values = [float(x) for x in parts[1:]]
+        data.append([node_id] + values)
+        # Remaining Nlayers-1 lines (continuations)
+        for l in block[1:]:
+            vals = [float(x) for x in l.split()]
+            data.append([node_id] + vals)
+
+    # Build main DataFrame
+    df = pd.DataFrame(data, columns=cols)
+
+    expected_rows = n_nodes * n_layers
+    if len(df) != expected_rows:
+        raise ValueError(f"Expected {expected_rows} rows, but got {len(df)}")
+
+    # Split into Nlayers DataFrames (one per layer)
+    dfs = []
+    for layer in range(n_layers):
+        layer_df = df.iloc[layer::n_layers, :].reset_index(drop=True)
+        dfs.append(layer_df)
+
+    return dfs
+
