@@ -252,7 +252,7 @@ def write_interpolation_master(prefix, regions):
 
             # print header line
             if interp_type.upper() == "CONST":
-                f.write(f"{nv} {interp_type} {"dummy_file.dat"} {values_file}\n")
+                f.write(f"{nv} {interp_type} {'dummy_file.dat'} {values_file}\n")
             else:
                 f.write(f"{nv} {interp_type} {spatial_file} {values_file}\n")
 
