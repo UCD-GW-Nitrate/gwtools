@@ -333,3 +333,106 @@ def split_prop_elev_matrix(A, split_output=False):
     id_elev_mat[:, hk_cols] = id_mat
 
     return id_elev_mat, hk_linear_mat
+
+def write_const_interpolation(prefix, region, arr):
+    """
+    Write files for a spatially constant interpolation.
+
+    The value is constant in space over the selected region, but `arr` may
+    contain multiple time values.
+
+    This writes:
+
+        prefix.dat
+        prefix_master.dat
+
+    Parameters
+    ----------
+    prefix : str or Path
+        Output file prefix.
+
+    region : dict
+        Dictionary defining exactly one region.
+
+        Option 1: polygon region
+            {
+                "region": array-like of shape (N, 2)
+            }
+
+        Option 2: bounding box region
+            {
+                "ll_pnt": [xmin, ymin],
+                "ur_pnt": [xmax, ymax]
+            }
+
+        The dictionary may contain both, but if `ll_pnt` and `ur_pnt`
+        are provided, the bounding-box definition is used.
+
+    arr : array-like
+        Constant interpolation values. Can be scalar, 1D, or 2D.
+        Written to `prefix.dat`.
+
+    Returns
+    -------
+    tuple[str, str], optional
+        `(master_filename, values_filename)` if return_filenames=True.
+    """
+
+    prefix = Path(prefix)
+
+    values_filename = prefix.with_name(prefix.name + "_values.dat")
+
+    arr = np.asarray(arr, dtype=float)
+    np.savetxt(values_filename, np.atleast_2d(arr), fmt="%.12g")
+
+    ll_pnt = region.get("ll_pnt", None)
+    ur_pnt = region.get("ur_pnt", None)
+    polygon = region.get("region", None)
+
+    def _is_empty(x):
+        return x is None or np.asarray(x).size == 0
+
+    has_bbox = not _is_empty(ll_pnt) and not _is_empty(ur_pnt)
+    has_polygon = not _is_empty(polygon)
+
+    if not has_bbox and not has_polygon:
+        raise ValueError(
+            "region must define either ll_pnt/ur_pnt or a polygon using key 'region'"
+        )
+
+    if has_bbox:
+        ll_pnt = np.asarray(ll_pnt, dtype=float).ravel()
+        ur_pnt = np.asarray(ur_pnt, dtype=float).ravel()
+
+        if ll_pnt.size != 2 or ur_pnt.size != 2:
+            raise ValueError("ll_pnt and ur_pnt must each be [x, y]")
+
+        master_region = {
+            "region": None,
+            "Type": "CONST",
+            "spatial_file": "dummy_file.dat",
+            "values_file": values_filename.name,
+            "ll_pnt": ll_pnt,
+            "ur_pnt": ur_pnt,
+        }
+
+    else:
+        polygon = np.asarray(polygon, dtype=float)
+
+        if polygon.ndim != 2 or polygon.shape[1] != 2:
+            raise ValueError("region['region'] must have shape (N, 2)")
+
+        if polygon.shape[0] <= 2:
+            raise ValueError("polygon region must have more than 2 points")
+
+        master_region = {
+            "region": polygon,
+            "Type": "CONST",
+            "spatial_file": "dummy_file.dat",
+            "values_file": values_filename.name,
+            "ll_pnt": None,
+            "ur_pnt": None,
+        }
+
+    write_interpolation_master( prefix,[master_region])
+
