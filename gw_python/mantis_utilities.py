@@ -3,6 +3,8 @@ import subprocess
 import numpy as np
 import h5py
 from dataclasses import dataclass
+from scipy.stats import lognorm
+from tqdm import tqdm
 
 def mantis_inputs():
 
@@ -467,3 +469,218 @@ def convert_column_to_raster(raster_column, shape, fill_value=-1):
     for i, (r, c) in enumerate(raster_column):
         raster[r, c] = i
     return raster
+
+def convolute_urf(urf, lf, init_conc=0.0):
+    """
+    Convolve URFs with loading functions and compute pre-existing concentration BTC.
+
+    Parameters
+    ----------
+    urf : array_like, shape (Ns, Nt)
+        Unit response functions.
+
+    lf : array_like, shape (Ns, Nt) or (Nt,) or (1, Nt)
+        Loading functions. If one loading function is provided, it is applied
+        to all URFs.
+
+    init_conc : float, default 0.0
+        Initial/background concentration used to compute prebtc.
+
+    Returns
+    -------
+    btc : ndarray, shape (Ns, Nt_lf)
+        Breakthrough curve from loading functions.
+
+    prebtc : ndarray, shape (Ns, Nt_lf)
+        Contribution from initial concentration:
+        prebtc = init_conc * (1 - cumulative_urf)
+    """
+
+    urf = np.asarray(urf, dtype=float).copy()
+    lf = np.asarray(lf, dtype=float)
+
+    if urf.ndim != 2:
+        raise ValueError("urf must be a 2D array with shape (Ns, Nt_urf).")
+
+    if lf.ndim == 1:
+        lf = lf[None, :]
+
+    if lf.ndim != 2:
+        raise ValueError("lf must be a 1D or 2D array.")
+
+    Ns, Nt_urf = urf.shape
+    Ns_lf, Nt_lf = lf.shape
+
+    if Ns_lf == 1:
+        lf = np.repeat(lf, Ns, axis=0)
+    elif Ns_lf != Ns:
+        raise ValueError(
+            "The number of URFs must equal the number of loading functions, "
+            "unless only one loading function is provided."
+        )
+
+    urf[urf < 0] = 0.0
+
+    btc = np.zeros((Ns, Nt_lf), dtype=float)
+    prebtc = np.zeros((Ns, Nt_lf), dtype=float)
+
+    n_conv = min(Nt_urf, Nt_lf)
+
+    for i in range(Ns):
+        # Loading contribution
+        full_conv = np.convolve(lf[i, :], urf[i, :], mode="full")
+        btc[i, :] = full_conv[:Nt_lf]
+
+        # Initial concentration contribution
+        cumurf = np.cumsum(urf[i, :n_conv])
+        prebtc[i, :n_conv] = init_conc * (1.0 - cumurf)
+
+        if Nt_lf > n_conv:
+            prebtc[i, n_conv:] = init_conc * (1.0 - cumurf[-1])
+
+    return btc, prebtc
+
+
+def simulate_feedback_concentrations(
+    VIwells, VIurfs, VImsa, scenario, viparam
+
+):
+    """
+    Simulate salinity feedback for all wells.
+
+    Parameters
+    ----------
+    VIwells : DataFrame
+        Must contain field 'Eid'.
+
+    VIurfs : DataFrame
+        Must contain fields:
+            Eid
+            v_cds
+
+        Rows correspond one-to-one with VImsa rows.
+
+    VImsa : ndarray
+        MSA matrix.
+        Column 6 = mu
+        Column 7 = sigma
+
+    scenario : dict
+        {
+            'applied_mm': 200,
+            'perc_ratio': 1/3,
+            'init_conc': 200,
+            'n_years': 200
+        }
+
+    viparam : dict
+        {
+            'm_col':6
+            's_col:'7
+        }
+
+    Returns
+    -------
+    applied_conc_all : ndarray
+        Shape (Nwells, Nyears)
+
+    perc_conc_all : ndarray
+        Shape (Nwells, Nyears)
+    """
+
+    applied_mm = scenario["applied_mm"]
+    perc_ratio = scenario["perc_ratio"]
+    init_conc = scenario["init_conc"]
+    n_years = scenario.get("n_years", 200)
+    m_col = viparam['m_col']
+    s_col = viparam['s_col']
+    w_field = viparam['w_field']
+
+    perc_mm = applied_mm * perc_ratio
+
+    x = np.arange(1, n_years + 1)
+
+    eids = VIurfs["Eid"].to_numpy()
+
+    # Build lookup once
+    eid_to_rows = {}
+    for i, eid in enumerate(eids):
+        eid_to_rows.setdefault(eid, []).append(i)
+
+    n_wells = len(VIwells)
+
+    applied_conc_all = np.zeros((n_wells, n_years))
+    perc_conc_all = np.zeros((n_wells, n_years))
+
+    for iw, well in enumerate(tqdm(VIwells.itertuples(),
+                                   total=len(VIwells),
+                                   desc="Simulating wells")):
+
+        rows = eid_to_rows.get(well.Eid)
+
+        if rows is None:
+            continue
+
+        rows = np.asarray(rows)
+
+        msa = VImsa[rows, :]
+        urfs = VIurfs.iloc[rows]
+
+        n_paths = len(rows)
+
+        urfs_mat = np.zeros((n_paths, n_years))
+
+        for ip in range(n_paths):
+
+            mu_ln = msa[ip, m_col]
+            sigma_ln = msa[ip, s_col]
+
+            if (
+                not np.isfinite(mu_ln)
+                or not np.isfinite(sigma_ln)
+                or mu_ln <= 0
+                or sigma_ln <= 0
+            ):
+                urfs_mat[ip, :] = 0.0
+                continue
+
+            urfs_mat[ip, :] = lognorm.pdf(
+                x,
+                s=sigma_ln,
+                scale=np.exp(mu_ln),
+            )
+
+        wgh = urfs[w_field].to_numpy(dtype=float)
+
+        if wgh.sum() <= 0:
+            continue
+
+        wgh /= wgh.sum()
+
+        lf = np.zeros(n_years)
+
+        for iyr in range(n_years):
+
+            btc, prebtc = convolute_urf(
+                urfs_mat,
+                lf[: iyr + 1],
+                init_conc,
+            )
+
+            tot_conc = btc[:, -1] + prebtc[:, -1]
+
+            well_conc = np.sum(tot_conc * wgh)
+
+            applied_conc_all[iw, iyr] = well_conc
+
+            perc_conc = (
+                well_conc
+                * applied_mm
+                / perc_mm
+            )
+
+            perc_conc_all[iw, iyr] = perc_conc
+
+            lf[iyr] = perc_conc
+
+    return applied_conc_all, perc_conc_all
