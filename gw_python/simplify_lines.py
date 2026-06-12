@@ -2,6 +2,22 @@ from shapely.geometry import LineString
 import numpy as np
 
 def douglas_peucker_3d(points, epsilon):
+    """Simplifies a 3D polyline using the Ramer-Douglas-Peucker (RDP) algorithm.
+
+        This function recursively reduces the number of points in a curve by
+        identifying and keeping 'key' points that deviate from a straight line
+        by more than a specified threshold (`epsilon`).
+
+        Args:
+            points (array-like): An (N, 3) sequence of 3D coordinates representing
+                the polyline.
+            epsilon (float): The maximum perpendicular distance tolerance. Points
+                closer to the segment than this value may be removed.
+
+        Returns:
+            numpy.ndarray: An (M, 3) array of the simplified 3D points where M <= N.
+            None: If the input is invalid, contains NaNs, or contains fewer than 2 points.
+        """
     if points is None or len(points) == 0:
         return None
 
@@ -41,6 +57,23 @@ def douglas_peucker_3d(points, epsilon):
 
 
 def simplify_to_linestring_3d(P,epsilon = 10.0):
+    """Simplifies a list of 3D points and converts them into a Shapely LineString.
+
+        This acts as a wrapper around `douglas_peucker_3d`. It applies the
+        simplification algorithm to the input data and safely instantiates a valid,
+        non-empty 3D Shapely `LineString` object.
+
+        Args:
+            P (array-like): An (N, 3) sequence of 3D coordinates.
+            epsilon (float, optional): The distance tolerance for simplification.
+                Defaults to 10.0.
+
+        Returns:
+            shapely.geometry.LineString: A valid 3D LineString object containing
+                the simplified path.
+            None: If the input has insufficient points, or if the resulting
+                LineString is empty, invalid, or raises an exception during creation.
+        """
     if P is None or len(P) < 2:
         return None
 
