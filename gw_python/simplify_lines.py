@@ -1,36 +1,38 @@
 from shapely.geometry import LineString
 import numpy as np
 
-def douglas_peucker_3d(points, epsilon):
-    """Simplifies a 3D polyline using the Ramer-Douglas-Peucker (RDP) algorithm.
+def douglas_peucker_3d(points, epsilon,original_idx=None):
+    """
+    Simplify a 3D polyline using the Ramer-Douglas-Peucker algorithm.
 
-        This function recursively reduces the number of points in a curve by
-        identifying and keeping 'key' points that deviate from a straight line
-        by more than a specified threshold (`epsilon`).
+    Returns
+    -------
+    simplified_points : ndarray
+        Simplified points with shape (M, 3).
 
-        Args:
-            points (array-like): An (N, 3) sequence of 3D coordinates representing
-                the polyline.
-            epsilon (float): The maximum perpendicular distance tolerance. Points
-                closer to the segment than this value may be removed.
+    kept_rows : ndarray
+        Row indices of the kept points in the original input array.
+    """
 
-        Returns:
-            numpy.ndarray: An (M, 3) array of the simplified 3D points where M <= N.
-            None: If the input is invalid, contains NaNs, or contains fewer than 2 points.
-        """
     if points is None or len(points) == 0:
-        return None
+        return None, None
 
     points = np.asarray(points, dtype=float)
 
-    # Remove NaNs or invalid points
-    if np.isnan(points).any() or points.shape[1] != 3:
-        return None
+    if points.ndim != 2 or points.shape[1] < 2:
+        return None, None
+
+    if np.isnan(points).any():
+        return None, None
 
     if points.shape[0] < 2:
-        return None
+        return None, None
 
-    # Line from first to last
+    if original_idx is None:
+        original_idx = np.arange(points.shape[0])
+    else:
+        original_idx = np.asarray(original_idx)
+
     start, end = points[0], points[-1]
     line_vec = end - start
     line_len = np.linalg.norm(line_vec)
@@ -47,43 +49,59 @@ def douglas_peucker_3d(points, epsilon):
     idx_max = np.argmax(distances)
     dmax = distances[idx_max]
 
-    # Recursive subdivision
     if dmax > epsilon:
-        left = douglas_peucker_3d(points[:idx_max + 1], epsilon)
-        right = douglas_peucker_3d(points[idx_max:], epsilon)
-        return np.vstack((left[:-1], right))
+        left_pts, left_idx = douglas_peucker_3d(
+            points[:idx_max + 1],
+            epsilon,
+            original_idx[:idx_max + 1]
+        )
+
+        right_pts, right_idx = douglas_peucker_3d(
+            points[idx_max:],
+            epsilon,
+            original_idx[idx_max:]
+        )
+
+        return (
+            np.vstack((left_pts[:-1], right_pts)),
+            np.concatenate((left_idx[:-1], right_idx))
+        )
+
     else:
-        return np.vstack((start, end))
+        return (
+            np.vstack((start, end)),
+            np.array([original_idx[0], original_idx[-1]])
+        )
 
 
-def simplify_to_linestring_3d(P,epsilon = 10.0):
-    """Simplifies a list of 3D points and converts them into a Shapely LineString.
+def simplify_to_linestring_3d(P, epsilon=10.0):
+    """
+    Simplify 3D points and convert them to a Shapely LineString.
 
-        This acts as a wrapper around `douglas_peucker_3d`. It applies the
-        simplification algorithm to the input data and safely instantiates a valid,
-        non-empty 3D Shapely `LineString` object.
+    Returns
+    -------
+    line : shapely.geometry.LineString
+        Simplified 3D LineString.
 
-        Args:
-            P (array-like): An (N, 3) sequence of 3D coordinates.
-            epsilon (float, optional): The distance tolerance for simplification.
-                Defaults to 10.0.
+    kept_rows : ndarray
+        Row indices of the kept points in the original input array.
+    """
 
-        Returns:
-            shapely.geometry.LineString: A valid 3D LineString object containing
-                the simplified path.
-            None: If the input has insufficient points, or if the resulting
-                LineString is empty, invalid, or raises an exception during creation.
-        """
     if P is None or len(P) < 2:
-        return None
+        return None, None
 
-    simplified = douglas_peucker_3d(np.array(P), epsilon)
+    simplified, kept_rows = douglas_peucker_3d(np.asarray(P), epsilon)
+
     if simplified is None or simplified.shape[0] < 2:
-        return None
+        return None, None
+
     try:
         line = LineString(simplified)
+
         if not line.is_valid or line.is_empty:
-            return None
-        return line
+            return None, None
+
+        return line, kept_rows
+
     except Exception:
-        return None
+        return None, None

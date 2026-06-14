@@ -1,6 +1,7 @@
+from pathlib import Path
 import pandas as pd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
 from shapely import affinity
 import geopandas as gpd
 from collections import defaultdict
@@ -76,16 +77,10 @@ def clip_elements_to_polygon(elem_gdf, clip_poly, clip_elem=True):
     Select element polygons overlapping a model domain polygon and
     optionally clip them to the domain boundary.
 
-    Parameters
-    ----------
-    elem_gdf : GeoDataFrame
-        Input element polygons.
-    clip_poly : shapely.geometry.Polygon
-        Polygon defining the local model domain.
-    clip_elem : bool, default=True
-        If True, clip intersecting elements to the domain.
-        If False, return the original geometries of all
-        intersecting elements.
+    Adds:
+    - Area_unclipped : area of the original element
+    - Area_clipped   : area after clipping, only if clip_elem=True
+    - Prcnt          : 100 * Area_clipped / Area_unclipped, only if clip_elem=True
     """
 
     # Determine relationship to model domain
@@ -94,6 +89,9 @@ def clip_elements_to_polygon(elem_gdf, clip_poly, clip_elem=True):
 
     # Keep only intersecting elements
     work_gdf = elem_gdf.loc[intersect].copy()
+
+    # Original element area
+    work_gdf["Area_unclipped"] = work_gdf.geometry.area
 
     # Add flags
     work_gdf["is_internal"] = inside.loc[intersect].values
@@ -109,6 +107,12 @@ def clip_elements_to_polygon(elem_gdf, clip_poly, clip_elem=True):
     )
 
     clipped_gdf = gpd.clip(work_gdf, rect_gdf)
+
+    # Clipped area and remaining percentage
+    clipped_gdf["Area_clipped"] = clipped_gdf.geometry.area
+    clipped_gdf["Prcnt_area"] = (
+            100.0 * clipped_gdf["Area_clipped"] / clipped_gdf["Area_unclipped"]
+    )
 
     return clipped_gdf.reset_index(drop=True)
 
@@ -385,3 +389,225 @@ def extract_clipped_mesh_outline(
     outline_segments_df = pd.DataFrame(segment_rows)
 
     return outline_points_df, outline_segments_df
+
+
+def write_polygon_outline_obj(gdf, obj_file, z=0.0, scale_factor=1.0):
+    """
+    Write polygon exterior boundaries to OBJ as line loops.
+
+    Coordinates are first translated so that the GeoDataFrame center
+    is at (0, 0), then scaled.
+
+    Transform:
+        x_obj = (x - x_center) * scale_factor
+        y_obj = (y - y_center) * scale_factor
+
+    To undo:
+        x = x_obj / scale_factor + x_center
+        y = y_obj / scale_factor + y_center
+
+    Returns
+    -------
+    translation : np.ndarray
+        Array [x_center, y_center]. Add this back after unscaling.
+    """
+
+    obj_file = Path(obj_file)
+
+    xmin, ymin, xmax, ymax = gdf.total_bounds
+    translation = np.array([
+        0.5 * (xmin + xmax),
+        0.5 * (ymin + ymax)
+    ], dtype=float)
+
+    geom = gdf.geometry.union_all()
+
+    if isinstance(geom, Polygon):
+        polygons = [geom]
+    elif isinstance(geom, MultiPolygon):
+        polygons = list(geom.geoms)
+    else:
+        raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+
+    vertex_id = 1
+
+    with open(obj_file, "w") as f:
+        f.write("# Wavefront OBJ polygon outline\n")
+        f.write(f"# translation_x {translation[0]:.12f}\n")
+        f.write(f"# translation_y {translation[1]:.12f}\n")
+        f.write(f"# scale_factor {scale_factor:.12f}\n")
+        f.write("# original = obj / scale_factor + translation\n")
+
+        for ipoly, poly in enumerate(polygons, start=1):
+            coords = np.asarray(poly.exterior.coords)
+
+            if np.allclose(coords[0], coords[-1]):
+                coords = coords[:-1]
+
+            ids = []
+
+            f.write(f"\no polygon_{ipoly}\n")
+
+            for x, y in coords:
+                xs = (x - translation[0]) * scale_factor
+                ys = (y - translation[1]) * scale_factor
+
+                f.write(f"v {xs:.6f} {ys:.6f} {z:.6f}\n")
+                ids.append(vertex_id)
+                vertex_id += 1
+
+            ids_closed = ids + [ids[0]]
+            f.write("l " + " ".join(map(str, ids_closed)) + "\n")
+
+    return translation
+
+
+def read_obj_mesh(obj_file):
+    """
+    Read a Wavefront OBJ mesh.
+
+    Only vertex ('v') and face ('f') records are used.
+
+    OBJ indices are converted from 1-based to 0-based.
+
+    Parameters
+    ----------
+    obj_file : str or Path
+        Path to OBJ file.
+
+    Returns
+    -------
+    vertices : ndarray (N, 3)
+        Vertex coordinates.
+
+    faces_by_nnodes : list of ndarray
+        List of face connectivity arrays grouped by number of nodes.
+
+        faces_by_nnodes[0] -> triangles   (ntri, 3)
+        faces_by_nnodes[1] -> quads       (nquad, 4)
+        faces_by_nnodes[2] -> pentagons   (npent, 5)
+        ...
+
+        Empty groups are omitted.
+
+    Examples
+    --------
+    vertices, faces = read_obj_mesh("mesh.obj")
+
+    triangles = faces[0]
+    quads = faces[1]
+    """
+
+    vertices = []
+    face_groups = defaultdict(list)
+
+    with open(obj_file, "r") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            # --------------------------------------------------
+            # Vertex
+            # --------------------------------------------------
+            if line.startswith("v "):
+                parts = line.split()
+
+                x = float(parts[1])
+                y = float(parts[2])
+                z = float(parts[3]) if len(parts) > 3 else 0.0
+
+                vertices.append([x, y, z])
+
+            # --------------------------------------------------
+            # Face
+            # --------------------------------------------------
+            elif line.startswith("f "):
+                parts = line.split()[1:]
+
+                face = []
+
+                for p in parts:
+                    # Handle:
+                    # f v
+                    # f v/vt
+                    # f v/vt/vn
+                    # f v//vn
+                    vid = int(p.split("/")[0]) - 1
+                    face.append(vid)
+
+                face_groups[len(face)].append(face)
+
+    vertices = np.asarray(vertices, dtype=float)
+
+    faces_by_nnodes = []
+
+    for n_nodes in sorted(face_groups):
+        faces_by_nnodes.append(
+            np.asarray(face_groups[n_nodes], dtype=np.int64)
+        )
+
+    return vertices, faces_by_nnodes
+
+
+def average_monthly_gwh_by_period(gwh, start_year, end_year):
+    """
+    Average groundwater heads by calendar month over a selected year period.
+
+    Parameters
+    ----------
+    gwh : tuple
+        gwh[0] : ndarray
+            Array with shape (n_elem, n_times, n_lay).
+        gwh[1] : pandas.DataFrame
+            DataFrame with n_times rows and fields:
+            D : days in month
+            M : month number, 1-12
+            Y : year
+
+    start_year : int
+        First year included.
+
+    end_year : int
+        Last year included.
+
+    Returns
+    -------
+    monthly_avg : list of ndarray
+        List of 12 arrays, each with shape (n_elem, n_lay).
+        The order is water-year order:
+
+        Oct, Nov, Dec, Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep
+    """
+
+    arr = gwh[0]
+    dates = gwh[1]
+
+    if arr.shape[1] != len(dates):
+        raise ValueError(
+            "gwh[0].shape[1] must match the number of rows in gwh[1]."
+        )
+
+    month_order = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    monthly_avg = []
+
+    for month in month_order:
+        mask = (
+            (dates["Y"] >= start_year) &
+            (dates["Y"] <= end_year) &
+            (dates["M"] == month)
+        ).to_numpy()
+
+        if not np.any(mask):
+            avg = np.full(
+                (arr.shape[0], arr.shape[2]),
+                np.nan
+            )
+        else:
+            avg = np.nanmean(arr[:, mask, :], axis=1)
+
+        monthly_avg.append(avg)
+
+    return monthly_avg

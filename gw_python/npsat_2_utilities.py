@@ -436,3 +436,122 @@ def write_const_interpolation(prefix, region, arr):
 
     write_interpolation_master( prefix,[master_region])
 
+
+def write_npsat_mesh(filename, xy, ids, cw=False):
+    """
+    Write an NPSAT mesh file.
+
+    Parameters
+    ----------
+    filename : str or Path
+        Output file name.
+
+    xy : ndarray
+        Node coordinates with shape (n_xy, 2).
+
+    ids : ndarray
+        Element connectivity with shape (n_elem, 4).
+        IDs are assumed to be zero-based.
+
+    cw : bool, default=False
+        If False, elements are written counter-clockwise.
+        If True, elements are written clockwise.
+    """
+
+    xy = np.asarray(xy, dtype=float)
+    ids = np.asarray(ids, dtype=int).copy()
+
+    if xy.ndim != 2 or xy.shape[1] != 2:
+        raise ValueError("xy must have shape (n_xy, 2).")
+
+    if ids.ndim != 2 or ids.shape[1] != 4:
+        raise ValueError("ids must have shape (n_elem, 4).")
+
+    if ids.min() < 0 or ids.max() >= xy.shape[0]:
+        raise ValueError("ids contain node indices outside the xy array.")
+
+    # Coordinates of each element: shape (n_elem, 4, 2)
+    elem_xy = xy[ids]
+
+    # Signed polygon area using shoelace formula
+    x = elem_xy[:, :, 0]
+    y = elem_xy[:, :, 1]
+
+    signed_area = 0.5 * np.sum(
+        x * np.roll(y, -1, axis=1) -
+        y * np.roll(x, -1, axis=1),
+        axis=1
+    )
+
+    # signed_area > 0  => CCW
+    # signed_area < 0  => CW
+    is_ccw = signed_area > 0
+
+    desired_ccw = not cw
+
+    flip_mask = is_ccw != desired_ccw
+
+    # Reverse node order where orientation is wrong
+    ids[flip_mask, :] = ids[flip_mask, ::-1]
+
+    n_xy = xy.shape[0]
+    n_elem = ids.shape[0]
+
+    filename = Path(filename)
+
+    with open(filename, "w") as f:
+        f.write(f"{n_xy} {n_elem}\n")
+        np.savetxt(f, xy, fmt="%.2f")
+        np.savetxt(f, ids, fmt="%d")
+
+def read_npsat_mesh(filename):
+    """
+    Read an NPSAT mesh file.
+
+    Parameters
+    ----------
+    filename : str or Path
+        Input mesh file.
+
+    Returns
+    -------
+    xy : ndarray
+        Node coordinates with shape (n_xy, 2).
+
+    ids : ndarray
+        Element connectivity with shape (n_elem, 4).
+        IDs are returned exactly as stored in the file.
+    """
+
+    with open(filename, "r") as f:
+
+        # Header
+        n_xy, n_elem = map(int, f.readline().split())
+
+        # Coordinates
+        xy = np.loadtxt(
+            [next(f) for _ in range(n_xy)],
+            dtype=float
+        )
+
+        # Connectivity
+        ids = np.loadtxt(
+            [next(f) for _ in range(n_elem)],
+            dtype=int
+        )
+
+    xy = np.atleast_2d(xy)
+    ids = np.atleast_2d(ids)
+
+    if xy.shape != (n_xy, 2):
+        raise ValueError(
+            f"Expected coordinates shape ({n_xy}, 2), got {xy.shape}"
+        )
+
+    if ids.shape != (n_elem, 4):
+        raise ValueError(
+            f"Expected connectivity shape ({n_elem}, 4), got {ids.shape}"
+        )
+
+    return xy, ids
+

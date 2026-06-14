@@ -2,6 +2,7 @@ import pandas as pd
 import geopandas as gpd
 import numpy as np
 from scipy.spatial import Delaunay
+from pathlib import Path
 
 def assign_fields_from_polygons_to_points(points: pd.DataFrame, polygons: gpd.GeoDataFrame,
                                           fields_to_copy: list, point_crs: str = "EPSG:3310",
@@ -106,3 +107,44 @@ def triangulate_inside_outline(outline_gdf, node_gdf):
     tri_ids_new = tri_ids_all[np.asarray(keep_tri)]
 
     return node_gdf_new, tri_ids_new
+
+
+def write_gpkg_layer(gdf: gpd.GeoDataFrame,
+                     gpkg_name: str,
+                     layer_name: str) -> None:
+    """
+    Write a GeoDataFrame to a GeoPackage layer.
+
+    If the GeoPackage does not exist, it is created.
+    If the layer already exists, it is overwritten.
+    Other layers in the GeoPackage are preserved.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame to write.
+
+    gpkg_name : str
+        Path to the GeoPackage file (*.gpkg).
+
+    layer_name : str
+        Name of the layer within the GeoPackage.
+
+    Examples
+    --------
+    write_gpkg_layer(outline_gdf,
+                     "model_layers.gpkg",
+                     "outline")
+
+    write_gpkg_layer(outline_gdf_buff,
+                     "model_layers.gpkg",
+                     "outline_buff")
+    """
+    gpkg_name = str(Path(gpkg_name))
+
+    gdf.to_file(
+        gpkg_name,
+        layer=layer_name,
+        driver="GPKG",
+        mode="w"
+    )

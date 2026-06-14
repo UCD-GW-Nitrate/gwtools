@@ -713,3 +713,240 @@ def read_conductivity_prop(filename, n_nodes, n_layers, n_lines_skip):
 
     return dfs
 
+
+def read_iwfm_smallwatersheds(filename):
+    """
+    Read an IWFM Small Watersheds file.
+
+    Returns
+    -------
+    watersheds : list[dict]
+        One dictionary per small watershed with keys:
+        ID, AREAS, IWBTS, NWB, IWB, QMAXWB
+
+        IWB and QMAXWB are lists with length NWB.
+    """
+
+    def is_comment_or_blank(line):
+        s = line.strip()
+        return (
+            s == ""
+            or s.startswith("C")
+            or s.startswith("c")
+            or s.startswith("#")
+        )
+
+    # Keep only non-comment, non-blank lines
+    with open(filename, "r") as f:
+        lines = [line.strip() for line in f if not is_comment_or_blank(line)]
+
+    # First two non-comment lines are ignored
+    lines = lines[2:]
+
+    # Next block of 4 non-comment lines: only first line is needed for NSW
+    NSW = int(lines[0].split()[0])
+
+    # Skip the full 4-line block
+    lines = lines[4:]
+
+    watersheds = []
+    i = 0
+
+    for _ in range(NSW):
+        parts = lines[i].split()
+        i += 1
+
+        if len(parts) < 6:
+            raise ValueError(f"Expected watershed header line with 6 values, got: {lines[i-1]}")
+
+        ws_id = int(parts[0])
+        areas = float(parts[1])
+        iwbts = int(parts[2])
+        nwb = int(parts[3])
+
+        iwb = [int(parts[4])]
+        qmaxwb = [float(parts[5])]
+
+        # Remaining NWB-1 rows contain only IWB and QMAXWB
+        for _ in range(nwb - 1):
+            parts = lines[i].split()
+            i += 1
+
+            if len(parts) < 2:
+                raise ValueError(f"Expected IWB/QMAXWB line with 2 values, got: {lines[i-1]}")
+
+            iwb.append(int(parts[0]))
+            qmaxwb.append(float(parts[1]))
+
+        watersheds.append({
+            "ID": ws_id,
+            "AREAS": areas,
+            "IWBTS": iwbts,
+            "NWB": nwb,
+            "IWB": iwb,
+            "QMAXWB": qmaxwb,
+        })
+
+    return watersheds
+
+
+def read_iwfm_stream_bed_param(filename, n_lines_skip = 4885, n_nodes=4634):
+    """
+    Read IWFM stream bed parameter file.
+
+    Parameters
+    ----------
+    filename : str
+        Input filename.
+
+    n_lines_skip : int
+        Number of lines to skip at the beginning of the file.
+
+    n_nodes : int
+        Number of stream nodes (rows) to read.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with columns:
+
+        IR      : River reach ID
+        WETPR   : Wetted perimeter
+        IRGW    : Groundwater node
+        CSTRM   : Streambed conductance
+        DSTRM   : Streambed thickness
+    """
+
+    records = []
+
+    with open(filename, "r") as f:
+
+        # Skip header lines
+        for _ in range(n_lines_skip):
+            next(f)
+
+        while len(records) < n_nodes:
+
+            try:
+                line = next(f)
+            except StopIteration:
+                raise ValueError(
+                    f"End of file reached after reading {len(records)} "
+                    f"nodes; expected {n_nodes}."
+                )
+
+            # Remove inline comments beginning with '/'
+            line = line.split("/", 1)[0].strip()
+
+            if not line:
+                continue
+
+            parts = line.split()
+
+            if len(parts) < 5:
+                continue
+
+            records.append({
+                "IR": int(parts[0]),
+                "WETPR": float(parts[1]),
+                "IRGW": int(parts[2]),
+                "CSTRM": float(parts[3]),
+                "DSTRM": float(parts[4]),
+            })
+
+    return pd.DataFrame(records)
+
+
+def read_iwfm_stream_stage(filename, n_times=None, multiplier=1.0):
+    """
+    Read IWFM stream stage hydrograph output.
+
+    Parameters
+    ----------
+    filename : str
+        IWFM stream hydrograph output file.
+
+    n_times : int or None, optional
+        Number of time steps to read. If None, read all time steps.
+
+    multiplier : float, optional
+        Multiplier applied to stage values Hs.
+
+    Returns
+    -------
+    dict
+        Keys:
+        HydId : ndarray
+        IRV   : ndarray
+        YMD   : ndarray with columns [year, month, day]
+        Hs    : ndarray with shape (n_nodes, n_times)
+    """
+
+    hyd_id = None
+    irv = None
+    ymd_records = []
+    hs_records = []
+
+    with open(filename, "r") as f:
+        for line in f:
+            s = line.strip()
+
+            if not s:
+                continue
+
+            if s.startswith("*"):
+                # Header lines
+                clean = s.lstrip("*").strip()
+
+                if clean.upper().startswith("HYDROGRAPH ID"):
+                    parts = clean.split()
+                    hyd_id = np.array([int(x) for x in parts[2:]], dtype=int)
+
+                elif clean.upper().startswith("NODES"):
+                    parts = clean.split()
+                    irv = np.array([int(x) for x in parts[1:]], dtype=int)
+
+                continue
+
+            # Data lines start here
+            parts = s.split()
+
+            if len(parts) < 2:
+                continue
+
+            date_token = parts[0].split("_")[0]
+            month, day, year = [int(v) for v in date_token.split("/")]
+
+            values = np.array([float(v) for v in parts[1:]], dtype=float)
+
+            if irv is not None and len(values) != len(irv):
+                raise ValueError(
+                    f"Expected {len(irv)} stage values, "
+                    f"but found {len(values)} on date {date_token}."
+                )
+
+            ymd_records.append([year, month, day])
+            hs_records.append(values * multiplier)
+
+            if n_times is not None and len(hs_records) >= n_times:
+                break
+
+    if hyd_id is None:
+        raise ValueError("Could not find '* HYDROGRAPH ID' header line.")
+
+    if irv is None:
+        raise ValueError("Could not find '* NODES' header line.")
+
+    ymd = np.array(ymd_records, dtype=int)
+
+    # Stored as time x node, then transpose to node x time
+    hs = np.vstack(hs_records).T
+
+    return {
+        "HydId": hyd_id,
+        "IRV": irv,
+        "YMD": ymd,
+        "Hs": hs,
+    }
+
+

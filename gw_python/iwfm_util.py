@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import geopandas as gpd
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point, LineString
 
 def mesh_to_gdf(nodes, elements, crs):
     node_lookup = nodes.set_index("ID")[["X", "Y"]]
@@ -276,4 +276,86 @@ def hvk_to_arrays(HVK, props):
         return out[props[0]]
 
     return tuple(out[p] for p in props)
+
+
+def watersheds_to_gdfs(watersheds, nodes_df, crs):
+    """
+    Convert IWFM small watershed connectivity to GeoDataFrames.
+
+    Parameters
+    ----------
+    watersheds : list[dict]
+        Output from read_iwfm_smallwatersheds().
+
+    nodes_df : pandas.DataFrame
+        DataFrame with fields:
+        ID, X, Y
+
+    crs : str, dict, pyproj.CRS, or int
+        CRS passed directly to GeoDataFrame.
+
+    Returns
+    -------
+    line_gdf : GeoDataFrame
+    point_gdf : GeoDataFrame
+    """
+
+    required_cols = {"ID", "X", "Y"}
+    missing = required_cols - set(nodes_df.columns)
+    if missing:
+        raise ValueError(f"nodes_df is missing required columns: {missing}")
+
+    node_lookup = nodes_df.set_index("ID")[["X", "Y"]].to_dict("index")
+
+    line_records = []
+    point_records = []
+
+    for ws in watersheds:
+        ws_id = ws["ID"]
+        iwb_list = ws["IWB"]
+        qmaxwb_list = ws["QMAXWB"]
+
+        if len(iwb_list) != len(qmaxwb_list):
+            raise ValueError(
+                f"Watershed ID {ws_id}: IWB and QMAXWB have different lengths"
+            )
+
+        base_attrs = {
+            key: value
+            for key, value in ws.items()
+            if key not in {"IWB", "QMAXWB"}
+        }
+
+        coords = []
+
+        for iwb, qmaxwb in zip(iwb_list, qmaxwb_list):
+            if iwb not in node_lookup:
+                raise KeyError(
+                    f"Watershed ID {ws_id}: IWB node {iwb} not found in nodes_df"
+                )
+
+            x = node_lookup[iwb]["X"]
+            y = node_lookup[iwb]["Y"]
+
+            coords.append((x, y))
+
+            point_records.append({
+                **base_attrs,
+                "IWB": iwb,
+                "QMAXWB": qmaxwb,
+                "geometry": Point(x, y),
+            })
+
+        # Skip watersheds with only one IWB
+        if len(coords) > 1:
+            line_records.append({
+                **base_attrs,
+                "IWB": iwb_list,
+                "geometry": LineString(coords),
+            })
+
+    line_gdf = gpd.GeoDataFrame(line_records, geometry="geometry",crs=crs)
+    point_gdf = gpd.GeoDataFrame(point_records, geometry="geometry",crs=crs)
+
+    return line_gdf, point_gdf
 
