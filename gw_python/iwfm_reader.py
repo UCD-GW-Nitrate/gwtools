@@ -949,4 +949,42 @@ def read_iwfm_stream_stage(filename, n_times=None, multiplier=1.0):
         "Hs": hs,
     }
 
+def read_iwfm_gw_recharge(filename):
+    with h5py.File(filename, "r") as f:
+        # datasets = list(f.keys())
+        # Read the names of the data
+        colIDnames = f['Attributes/FullDataNames'][:]
+        # Read the element ids of the data for the 1st layer since all recharge happens on that layer
+        colIDs = f['Attributes/Layer1_ElemDataColumns'][:].transpose()
+        # All DP minus and all other layers are zero
+        # dp Deep percolation
+        c2vs_dp_p = f[f'Layer_{1}/Deep Percolation_Inflow (+)'][:].transpose()
+        c2vs_dp_m = f[f'Layer_{1}/Deep Percolation_Outflow (-)'][:].transpose()
+        # bp Bypass recoverable loss
+        c2vs_bp_p = f[f'Layer_{1}/Bypass Recoverable Loss_Inflow (+)'][:].transpose()
+        c2vs_bp_m = f[f'Layer_{1}/Bypass Recoverable Loss_Outflow (-)'][:].transpose()
+        # dv diversion recoverable loss
+        c2vs_dv_p = f[f'Layer_{1}/Diversion Recoverable Loss_Inflow (+)'][:].transpose()
+        c2vs_dv_m = f[f'Layer_{1}/Diversion Recoverable Loss_Outflow (-)'][:].transpose()
+        # tl tile drains
+        c2vs_tl_p = f[f'Layer_{1}/Tile Drains_Outflow (-)'][:].transpose()
+        c2vs_tl_m = f[f'Layer_{1}/Tile Drains_Inflow (+)'][:].transpose()
+        # element areas
+        elem_area = f['Attributes/SystemData%ElementAreas'][:]
+        elem_area_m2 = elem_area * 0.092903
+
+        return {
+            "ColIDnames": colIDnames,
+            "ColIDs": colIDs,
+            "c2vs_dp_p": c2vs_dp_p,
+            "c2vs_dp_m": c2vs_dp_m,
+            "c2vs_bp_p": c2vs_bp_p,
+            "c2vs_bp_m": c2vs_bp_m,
+            "c2vs_dv_p": c2vs_dv_p,
+            "c2vs_dv_m": c2vs_dv_m,
+            "c2vs_tl_p": c2vs_tl_p,
+            "c2vs_tl_m": c2vs_tl_m,
+            "elem_area_m2": elem_area_m2
+        }
+
 
