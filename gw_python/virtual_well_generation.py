@@ -191,3 +191,208 @@ def fit_pair_kde(df, x_field, y_field, bandwidth=None):
     model.max_density = kde(xy).max()
 
     return model
+
+def _is_valid_positive(v):
+    return pd.notna(v) and np.isfinite(v) and float(v) > 0
+
+def _model_values_for_field(model, field):
+    if model.x_field == field:
+        return 10 ** model.xy_log[:, 0]
+    elif model.y_field == field:
+        return 10 ** model.xy_log[:, 1]
+    else:
+        return None
+
+def get_field_range(field, models):
+    """
+    Get the narrowest available physical-value range for a field
+    from all PairKDE models that contain that field.
+    """
+    ranges = []
+
+    for model in models:
+        vals = _model_values_for_field(model, field)
+        if vals is not None:
+            ranges.append((np.nanmin(vals), np.nanmax(vals)))
+
+    if len(ranges) == 0:
+        raise ValueError(f"No KDE model contains field '{field}'.")
+
+    # Try intersection first
+    lo = max(r[0] for r in ranges)
+    hi = min(r[1] for r in ranges)
+
+    if lo < hi:
+        return lo, hi
+
+    # Fallback: use the narrowest individual range
+    widths = [r[1] - r[0] for r in ranges]
+    return ranges[int(np.argmin(widths))]
+
+def sample_field_from_ecdf(field, models, rng=None):
+    """
+    Sample a field from empirical KDE training values.
+    Sampling is done from the narrowest model-supported range.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    lo, hi = get_field_range(field, models)
+
+    vals_all = []
+
+    for model in models:
+        vals = _model_values_for_field(model, field)
+        if vals is not None:
+            vals = vals[(vals >= lo) & (vals <= hi)]
+            vals_all.append(vals)
+
+    vals_all = np.concatenate(vals_all)
+
+    if len(vals_all) == 0:
+        # fallback to log-uniform
+        return 10 ** rng.uniform(np.log10(lo), np.log10(hi))
+
+    return float(rng.choice(vals_all))
+
+def sample_field_loguniform(field, models, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    lo, hi = get_field_range(field, models)
+    return float(10 ** rng.uniform(np.log10(lo), np.log10(hi)))
+
+def sample_Q_with_irrigation_prob(
+    q_field,
+    models,
+    swat_irrg_prob,
+    rng=None,
+    method="ecdf",
+):
+    """
+    Generate Q using the irrigation probability as a lower-bound modifier.
+
+    swat_irrg_prob should be in [0, 1].
+    Larger values push candidate Q toward larger pumping/yield values.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    p = float(np.clip(swat_irrg_prob, 0.0, 1.0))
+
+    q_min, q_max = get_field_range(q_field, models)
+
+    # Lower bound increases with irrigation probability
+    q_low = q_min + p * (q_max - q_min)
+
+    if q_low >= q_max:
+        q_low = q_min
+
+    if method == "ecdf":
+        vals_all = []
+
+        for model in models:
+            vals = _model_values_for_field(model, q_field)
+            if vals is not None:
+                vals = vals[(vals >= q_low) & (vals <= q_max)]
+                vals_all.append(vals)
+
+        vals_all = np.concatenate(vals_all) if len(vals_all) > 0 else np.array([])
+
+        if len(vals_all) > 0:
+            return float(rng.choice(vals_all))
+
+    # fallback to log-uniform
+    return float(10 ** rng.uniform(np.log10(q_low), np.log10(q_max)))
+
+
+def impute_D_SL_Q(
+    D,
+    SL,
+    Q,
+    model_D_Q,
+    model_D_SL,
+    model_SL_Q,
+    swat_irrg_prob=0.0,
+    max_iter=10000,
+    rng=None,
+    sample_method="ecdf",
+):
+    """
+    Impute missing D, SL, and Q using three pairwise KDE models.
+
+    Observed positive values are kept fixed.
+    Missing or invalid values are sampled.
+
+    Parameters
+    ----------
+    D : float
+        TOTALCOMPLETEDDEPTH.
+    SL : float
+        ScreenLength.
+    Q : float
+        WELLYIELD.
+    model_D_Q, model_D_SL, model_SL_Q : PairKDE
+        Pairwise KDE models.
+    swat_irrg_prob : float
+        Raster-derived probability/intensity value in [0, 1].
+    max_iter : int
+        Maximum rejection-sampling attempts.
+    rng : np.random.Generator or None
+        Random generator.
+    sample_method : {"ecdf", "loguniform"}
+        How to sample non-Q missing variables.
+
+    Returns
+    -------
+    D_imp, SL_imp, Q_imp, accepted, n_iter
+    """
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    models = [model_D_Q, model_D_SL, model_SL_Q]
+
+    D_fixed = _is_valid_positive(D)
+    SL_fixed = _is_valid_positive(SL)
+    Q_fixed = _is_valid_positive(Q)
+
+    D0 = float(D) if D_fixed else np.nan
+    SL0 = float(SL) if SL_fixed else np.nan
+    Q0 = float(Q) if Q_fixed else np.nan
+
+    sampler = sample_field_from_ecdf if sample_method == "ecdf" else sample_field_loguniform
+
+    for it in range(1, max_iter + 1):
+
+        D_cand = D0 if D_fixed else sampler("TOTALCOMPLETEDDEPTH", models, rng)
+        SL_cand = SL0 if SL_fixed else sampler("ScreenLength", models, rng)
+
+        Q_cand = (
+            Q0
+            if Q_fixed
+            else sample_Q_with_irrigation_prob(
+                "WELLYIELD",
+                models,
+                swat_irrg_prob,
+                rng=rng,
+                method=sample_method,
+            )
+        )
+
+        # Physical constraint: screen length cannot exceed completed depth
+        if SL_cand > D_cand:
+            continue
+
+        p_D_Q = model_D_Q.accept_probability(D_cand, Q_cand)[0]
+        p_D_SL = model_D_SL.accept_probability(D_cand, SL_cand)[0]
+        p_SL_Q = model_SL_Q.accept_probability(SL_cand, Q_cand)[0]
+
+        if (
+            rng.random() < p_D_Q and
+            rng.random() < p_D_SL and
+            rng.random() < p_SL_Q
+        ):
+            return D_cand, SL_cand, Q_cand, True, it
+
+    return D0, SL0, Q0, False, max_iter
