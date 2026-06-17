@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
+from scipy.interpolate import RegularGridInterpolator
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
@@ -192,6 +193,58 @@ def fit_pair_kde(df, x_field, y_field, bandwidth=None):
 
     return model
 
+
+def make_raster_probability_interpolator(
+    prob_grid,
+    transform,
+    min_prob=0.10,
+    fallback_prob=0.10,
+    method="linear",
+):
+    """
+    Build an interpolator for a raster probability grid.
+
+    Returns a callable with signature f(x, y). The returned value is clipped to
+    [0, 1], uses fallback_prob outside the raster or over NaN cells, and applies
+    min_prob as a floor for finite interpolated values.
+    """
+
+    prob_grid = np.asarray(prob_grid, dtype=float)
+
+    if not np.isclose(transform.b, 0.0) or not np.isclose(transform.d, 0.0):
+        raise ValueError("Rotated/sheared raster transforms are not supported.")
+
+    n_rows, n_cols = prob_grid.shape
+    cols = np.arange(n_cols)
+    rows = np.arange(n_rows)
+
+    xs = transform.c + (cols + 0.5) * transform.a
+    ys = transform.f + (rows + 0.5) * transform.e
+
+    grid = prob_grid.copy()
+    if ys[0] > ys[-1]:
+        ys = ys[::-1]
+        grid = grid[::-1, :]
+    if xs[0] > xs[-1]:
+        xs = xs[::-1]
+        grid = grid[:, ::-1]
+
+    interpolator = RegularGridInterpolator(
+        (ys, xs),
+        grid,
+        method=method,
+        bounds_error=False,
+        fill_value=np.nan,
+    )
+
+    def interpolate(x, y):
+        p = float(interpolator((y, x)))
+        if not np.isfinite(p):
+            p = fallback_prob
+        return float(np.clip(max(p, min_prob), 0.0, 1.0))
+
+    return interpolate
+
 def _is_valid_positive(v):
     return pd.notna(v) and np.isfinite(v) and float(v) > 0
 
@@ -231,21 +284,39 @@ def get_field_range(field, models):
 
 def sample_field_from_ecdf(field, models, rng=None):
     """
-    Sample a field from empirical KDE training values.
-    Sampling is done from the narrowest model-supported range.
+    Sample a field from the empirical observed values.
+
+    Important:
+    - The admissible range is the narrowest shared range from the KDE models.
+    - Duplicate values are retained.
+    - Therefore commonly observed values are sampled more frequently.
     """
     if rng is None:
         rng = np.random.default_rng()
 
+    # Narrowest admissible range from all models containing this field
     lo, hi = get_field_range(field, models)
 
     vals_all = []
 
     for model in models:
         vals = _model_values_for_field(model, field)
-        if vals is not None:
-            vals = vals[(vals >= lo) & (vals <= hi)]
+        if vals is None:
+            continue
+        vals = np.asarray(vals, dtype=float)
+        vals = vals[
+            np.isfinite(vals) &
+            (vals > 0) &
+            (vals >= lo) &
+            (vals <= hi)
+        ]
+
+        if len(vals) > 0:
             vals_all.append(vals)
+
+    if len(vals_all) == 0:
+        # Fallback only if no empirical values are available
+        return float(10 ** rng.uniform(np.log10(lo), np.log10(hi)))
 
     vals_all = np.concatenate(vals_all)
 
@@ -253,6 +324,8 @@ def sample_field_from_ecdf(field, models, rng=None):
         # fallback to log-uniform
         return 10 ** rng.uniform(np.log10(lo), np.log10(hi))
 
+    # Keep duplicates intentionally.
+    # Common values therefore have higher sampling probability.
     return float(rng.choice(vals_all))
 
 def sample_field_loguniform(field, models, rng=None):
@@ -262,48 +335,98 @@ def sample_field_loguniform(field, models, rng=None):
     lo, hi = get_field_range(field, models)
     return float(10 ** rng.uniform(np.log10(lo), np.log10(hi)))
 
-def sample_Q_with_irrigation_prob(
+def sample_Q_conditioned(
     q_field,
     models,
-    swat_irrg_prob,
+    conditioning_prob=None,
     rng=None,
     method="ecdf",
+    low_quantile=0.05,
+    high_quantile=0.95,
+    spread_frac=0.15,
 ):
     """
-    Generate Q using the irrigation probability as a lower-bound modifier.
+    Sample Q from observed WCR values, optionally conditioned by an external
+    probability/intensity value.
 
-    swat_irrg_prob should be in [0, 1].
-    Larger values push candidate Q toward larger pumping/yield values.
+    conditioning_prob = None:
+        sample directly from the empirical Q distribution.
+
+    conditioning_prob = 0:
+        sample from the low-Q part of the empirical distribution.
+
+    conditioning_prob = 1:
+        sample from the high-Q part of the empirical distribution.
     """
     if rng is None:
         rng = np.random.default_rng()
 
-    p = float(np.clip(swat_irrg_prob, 0.0, 1.0))
+    vals_all = []
 
-    q_min, q_max = get_field_range(q_field, models)
+    for model in models:
+        vals = _model_values_for_field(model, q_field)
 
-    # Lower bound increases with irrigation probability
-    q_low = q_min + p * (q_max - q_min)
+        if vals is not None:
+            vals = np.asarray(vals, dtype=float)
+            vals = vals[np.isfinite(vals) & (vals > 0)]
 
-    if q_low >= q_max:
-        q_low = q_min
-
-    if method == "ecdf":
-        vals_all = []
-
-        for model in models:
-            vals = _model_values_for_field(model, q_field)
-            if vals is not None:
-                vals = vals[(vals >= q_low) & (vals <= q_max)]
+            if len(vals) > 0:
                 vals_all.append(vals)
 
-        vals_all = np.concatenate(vals_all) if len(vals_all) > 0 else np.array([])
+    if len(vals_all) == 0:
+        raise ValueError(f"No valid Q values found for field '{q_field}'.")
 
-        if len(vals_all) > 0:
-            return float(rng.choice(vals_all))
+    q_vals = np.concatenate(vals_all)
 
-    # fallback to log-uniform
-    return float(10 ** rng.uniform(np.log10(q_low), np.log10(q_max)))
+    if len(q_vals) == 0:
+        raise ValueError(f"No valid Q values found for field '{q_field}'.")
+
+    # Case 1: no conditioning. Use empirical distribution directly.
+    if conditioning_prob is None:
+        if method == "ecdf":
+            return float(rng.choice(q_vals))
+
+        q_min = np.min(q_vals)
+        q_max = np.max(q_vals)
+
+        return float(
+            10 ** rng.uniform(
+                np.log10(q_min),
+                np.log10(q_max)
+            )
+        )
+
+    # Case 2: external conditioning probability/intensity is provided.
+    p = float(np.clip(conditioning_prob, 0.0, 1.0))
+
+    qlo = np.quantile(q_vals, low_quantile)
+    qhi = np.quantile(q_vals, high_quantile)
+
+    q_target = qlo + p * (qhi - qlo)
+
+    spread = spread_frac * (qhi - qlo)
+
+    q_min = max(np.min(q_vals), q_target - spread)
+    q_max = min(np.max(q_vals), q_target + spread)
+
+    q_candidates = q_vals[
+        (q_vals >= q_min) &
+        (q_vals <= q_max)
+    ]
+
+    if method == "ecdf" and len(q_candidates) > 0:
+        return float(rng.choice(q_candidates))
+
+    # Fallback: log-uniform within the conditioned interval
+    if q_min <= 0 or q_max <= 0 or q_min >= q_max:
+        return float(rng.choice(q_vals))
+
+    return float(
+        10 ** rng.uniform(
+            np.log10(q_min),
+            np.log10(q_max)
+        )
+    )
 
 
 def impute_D_SL_Q(
@@ -317,6 +440,9 @@ def impute_D_SL_Q(
     max_iter=10000,
     rng=None,
     sample_method="ecdf",
+    D_fld="TOTALCOMPLETEDDEPTH",
+    SL_fld="ScreenLength",
+    Q_fld="WELLYIELD",
 ):
     """
     Impute missing D, SL, and Q using three pairwise KDE models.
@@ -365,16 +491,16 @@ def impute_D_SL_Q(
 
     for it in range(1, max_iter + 1):
 
-        D_cand = D0 if D_fixed else sampler("TOTALCOMPLETEDDEPTH", models, rng)
-        SL_cand = SL0 if SL_fixed else sampler("ScreenLength", models, rng)
+        D_cand = D0 if D_fixed else sampler(D_fld, models, rng)
+        SL_cand = SL0 if SL_fixed else sampler(SL_fld, models, rng)
 
         Q_cand = (
             Q0
             if Q_fixed
-            else sample_Q_with_irrigation_prob(
-                "WELLYIELD",
+            else sample_Q_conditioned(
+                Q_fld,
                 models,
-                swat_irrg_prob,
+                conditioning_prob=swat_irrg_prob,
                 rng=rng,
                 method=sample_method,
             )
