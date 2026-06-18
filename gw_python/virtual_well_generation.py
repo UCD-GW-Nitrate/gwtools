@@ -5,6 +5,8 @@ from scipy.stats import gaussian_kde
 from scipy.interpolate import RegularGridInterpolator
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 @dataclass
@@ -627,3 +629,86 @@ def make_region_stats(ireg, group_name, wcr_obs, completed_df,
         rec.update(_basic_dist_stats(comp_vals, f"{short_name}_completed"))
 
     return rec
+
+
+def _as_plot_array(v):
+    if v is None:
+        return []
+
+    if isinstance(v, np.ndarray):
+        return v
+
+    if isinstance(v, (list, tuple, pd.Series)):
+        return np.asarray(v)
+
+    # Handles arrays stored as object/scalar strings badly
+    return np.asarray(list(v)) if hasattr(v, "__iter__") else []
+
+
+def str_to_array(s):
+    if isinstance(s, np.ndarray):
+        return s
+
+    if isinstance(s, list):
+        return np.asarray(s, dtype=float)
+
+    if not isinstance(s, str):
+        return np.array([])
+
+    s = s.strip()
+
+    # Remove brackets
+    s = s.strip("[]")
+
+    # Convert whitespace-separated or comma-separated values
+    return np.fromstring(
+        s.replace(",", " "),
+        sep=" "
+    )
+
+
+def plot_ecdf_comparison(stats_df, prop="D"):
+    import plotly.graph_objects as go
+    import plotly.express as px
+
+    fig = go.Figure()
+    colors = px.colors.qualitative.Dark24
+
+    for i, row in stats_df.iterrows():
+        clr = colors[i % len(colors)]
+        irg = row["SubRegion"]
+
+        x_obs = str_to_array(row[f"{prop}_obs_ecdf_x"])
+        y_obs = str_to_array(row[f"{prop}_obs_ecdf_y"])
+        x_comp = str_to_array(row[f"{prop}_completed_ecdf_x"])
+        y_comp = str_to_array(row[f"{prop}_completed_ecdf_y"])
+
+        if len(x_obs) > 0:
+            fig.add_trace(go.Scatter(
+                x=x_obs,
+                y=y_obs,
+                mode="lines",
+                line=dict(color=clr, dash="dash"),
+                name=f"IRG {irg} Obs",
+                legendgroup=f"IRG{irg}",
+            ))
+
+        if len(x_comp) > 0:
+            fig.add_trace(go.Scatter(
+                x=x_comp,
+                y=y_comp,
+                mode="lines",
+                line=dict(color=clr, dash="solid"),
+                name=f"IRG {irg} Completed",
+                legendgroup=f"IRG{irg}",
+            ))
+
+    fig.update_layout(
+        title=f"{prop} ECDF Comparison",
+        xaxis_title=prop,
+        yaxis_title="ECDF",
+        template="plotly_white",
+        height=700,
+    )
+
+    return fig
