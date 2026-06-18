@@ -487,6 +487,9 @@ def impute_D_SL_Q(
     SL0 = float(SL) if SL_fixed else np.nan
     Q0 = float(Q) if Q_fixed else np.nan
 
+    if D_fixed and SL_fixed and Q_fixed:
+        return D0, SL0, Q0, True, 0
+
     sampler = sample_field_from_ecdf if sample_method == "ecdf" else sample_field_loguniform
 
     for it in range(1, max_iter + 1):
@@ -522,3 +525,105 @@ def impute_D_SL_Q(
             return D_cand, SL_cand, Q_cand, True, it
 
     return D0, SL0, Q0, False, max_iter
+
+def _positive_values(df, field):
+    vals = pd.to_numeric(df[field], errors="coerce").to_numpy(dtype=float)
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+    return vals
+
+
+def _basic_dist_stats(vals, prefix):
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+
+    out = {
+        f"{prefix}_n": len(vals),
+        f"{prefix}_mean": np.nan,
+        f"{prefix}_std": np.nan,
+        f"{prefix}_min": np.nan,
+        f"{prefix}_p05": np.nan,
+        f"{prefix}_p25": np.nan,
+        f"{prefix}_p50": np.nan,
+        f"{prefix}_p75": np.nan,
+        f"{prefix}_p95": np.nan,
+        f"{prefix}_max": np.nan,
+        f"{prefix}_ecdf_x": np.array([]),
+        f"{prefix}_ecdf_y": np.array([]),
+        f"{prefix}_pdf_bins": np.array([]),
+        f"{prefix}_pdf_density": np.array([]),
+    }
+
+    if len(vals) == 0:
+        return out
+
+    vals_sort = np.sort(vals)
+
+    out[f"{prefix}_mean"] = np.mean(vals)
+    out[f"{prefix}_std"] = np.std(vals)
+    out[f"{prefix}_min"] = np.min(vals)
+    out[f"{prefix}_p05"] = np.percentile(vals, 5)
+    out[f"{prefix}_p25"] = np.percentile(vals, 25)
+    out[f"{prefix}_p50"] = np.percentile(vals, 50)
+    out[f"{prefix}_p75"] = np.percentile(vals, 75)
+    out[f"{prefix}_p95"] = np.percentile(vals, 95)
+    out[f"{prefix}_max"] = np.max(vals)
+
+    out[f"{prefix}_ecdf_x"] = vals_sort
+    out[f"{prefix}_ecdf_y"] = np.arange(1, len(vals_sort) + 1) / len(vals_sort)
+
+    pdf_density, pdf_edges = np.histogram(vals, bins=30, density=True)
+    out[f"{prefix}_pdf_bins"] = pdf_edges
+    out[f"{prefix}_pdf_density"] = pdf_density
+
+    return out
+
+
+def make_region_stats(ireg, group_name, wcr_obs, completed_df,
+    D_fld = "TOTALCOMPLETEDDEPTH",
+    SL_fld = "ScreenLength",
+    Q_fld = "WELLYIELD",
+):
+    rec = {
+        "SubRegion": ireg + 1,
+        "Group": group_name,
+        "n_wells": len(wcr_obs),
+        "n_D_obs": len(_positive_values(wcr_obs, D_fld)),
+        "n_SL_obs": len(_positive_values(wcr_obs, SL_fld)),
+        "n_Q_obs": len(_positive_values(wcr_obs, Q_fld)),
+        "n_D_Q_pairs_obs": len(
+            wcr_obs[
+                (pd.to_numeric(wcr_obs[D_fld], errors="coerce") > 0) &
+                (pd.to_numeric(wcr_obs[Q_fld], errors="coerce") > 0)
+            ]
+        ),
+        "n_D_SL_pairs_obs": len(
+            wcr_obs[
+                (pd.to_numeric(wcr_obs[D_fld], errors="coerce") > 0) &
+                (pd.to_numeric(wcr_obs[SL_fld], errors="coerce") > 0)
+            ]
+        ),
+        "n_SL_Q_pairs_obs": len(
+            wcr_obs[
+                (pd.to_numeric(wcr_obs[SL_fld], errors="coerce") > 0) &
+                (pd.to_numeric(wcr_obs[Q_fld], errors="coerce") > 0)
+            ]
+        ),
+        "n_accepted": int(completed_df["Accepted"].sum()) if len(completed_df) > 0 else 0,
+        "mean_n_iter": completed_df["NIter"].mean() if len(completed_df) > 0 else np.nan,
+    }
+
+    field_map = {
+        "D": (D_fld, "Depth"),
+        "SL": (SL_fld, "SL"),
+        "Q": (Q_fld, "Wyield"),
+    }
+
+    for short_name, (obs_field, comp_field) in field_map.items():
+        obs_vals = _positive_values(wcr_obs, obs_field)
+        comp_vals = pd.to_numeric(completed_df[comp_field], errors="coerce").to_numpy(dtype=float)
+        comp_vals = comp_vals[np.isfinite(comp_vals) & (comp_vals > 0)]
+
+        rec.update(_basic_dist_stats(obs_vals, f"{short_name}_obs"))
+        rec.update(_basic_dist_stats(comp_vals, f"{short_name}_completed"))
+
+    return rec
