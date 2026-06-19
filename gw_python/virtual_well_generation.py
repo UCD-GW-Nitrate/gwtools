@@ -730,48 +730,216 @@ def str_to_array(s):
     )
 
 
-def plot_ecdf_comparison(stats_df, prop="D"):
-    import plotly.graph_objects as go
-    import plotly.express as px
+def plot_ecdf_comparison(stats_records,
+    prop="D",
+    show_irg= None,
+    show_observed=True,
+    show_completed=True
+ ):
+    """
+    Plot ECDF comparison for all subregions.
+
+    Parameters
+    ----------
+    stats_records : list
+        Output from make_region_stats().
+    prop : str
+        "D", "SL", or "Q"
+    show_observed : bool
+    show_completed : bool
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+
+    if show_irg is not None:
+        show_irg = set(show_irg)
 
     fig = go.Figure()
     colors = px.colors.qualitative.Dark24
 
-    for i, row in stats_df.iterrows():
+    for i, rec in enumerate(stats_records):
+        irg = rec["SubRegion"]
+
+        if show_irg is not None and irg not in show_irg:
+            continue
         clr = colors[i % len(colors)]
-        irg = row["SubRegion"]
 
-        x_obs = str_to_array(row[f"{prop}_obs_ecdf_x"])
-        y_obs = str_to_array(row[f"{prop}_obs_ecdf_y"])
-        x_comp = str_to_array(row[f"{prop}_completed_ecdf_x"])
-        y_comp = str_to_array(row[f"{prop}_completed_ecdf_y"])
+        if prop == 'D':
+            lbl = f"SL {rec['counts']['n_D_SL_pairs_obs']}, Q {rec['counts']['n_D_Q_pairs_obs']}"
+        elif prop == 'SL':
+            lbl = f"D {rec['counts']['n_D_SL_pairs_obs']}, Q {rec['counts']['n_SL_Q_pairs_obs']}"
+        elif prop == 'Q':
+            lbl = f"D {rec['counts']['n_D_Q_pairs_obs']}, SL {rec['counts']['n_SL_Q_pairs_obs']}"
 
-        if len(x_obs) > 0:
-            fig.add_trace(go.Scatter(
-                x=x_obs,
-                y=y_obs,
-                mode="lines",
-                line=dict(color=clr, dash="dash"),
-                name=f"IRG {irg} Obs",
-                legendgroup=f"IRG{irg}",
-            ))
 
-        if len(x_comp) > 0:
-            fig.add_trace(go.Scatter(
-                x=x_comp,
-                y=y_comp,
-                mode="lines",
-                line=dict(color=clr, dash="solid"),
-                name=f"IRG {irg} Completed",
-                legendgroup=f"IRG{irg}",
-            ))
+        obs = rec["properties"][prop]["observed"]
+        comp = rec["properties"][prop]["completed"]
+
+        if show_observed and obs["n"] > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=obs["ecdf_x"],
+                    y=obs["ecdf_y"],
+                    mode="lines",
+                    line=dict(
+                        color=clr,
+                        dash="dash",
+                        width=2,
+                    ),
+                    name=f"IRG {irg} Obs ({lbl})",
+                    legendgroup=f"IRG{irg}",
+                )
+            )
+        if show_completed and comp["n"] > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=comp["ecdf_x"],
+                    y=comp["ecdf_y"],
+                    mode="lines",
+                    line=dict(
+                        color=clr,
+                        dash="solid",
+                        width=2,
+                    ),
+                    name=f"IRG {irg} Imp ({rec['counts']['n_accepted']}/{rec['counts']['n_wells']})",
+                    legendgroup=f"IRG{irg}",
+                )
+            )
+
+        prop_names = {
+            "D": "Depth",
+            "SL": "Screen Length",
+            "Q": "Well Yield",
+        }
 
     fig.update_layout(
-        title=f"{prop} ECDF Comparison",
-        xaxis_title=prop,
+        title=f"{prop_names.get(prop, prop)} ECDF Comparison",
+        xaxis_title=prop_names.get(prop, prop),
         yaxis_title="ECDF",
-        template="plotly_white",
-        height=700,
+        template="plotly_dark",
+        height=600,
+        width=800,
+    )
+
+    return fig
+
+
+def plot_pdf_comparison(
+    stats_records,
+    prop="D",
+    show_irg= None,
+    alpha=0.25,
+    show_observed=True,
+    show_completed=True,
+):
+    """
+    Plot observed and completed PDFs for all subregions.
+
+    Parameters
+    ----------
+    stats_records : list
+        Output from make_region_stats()
+
+    prop : str
+        "D", "SL", or "Q"
+
+    alpha : float
+        Fill transparency for completed distributions.
+
+    show_observed : bool
+    show_completed : bool
+    """
+
+    if show_irg is not None:
+        show_irg = set(show_irg)
+
+    fig = go.Figure()
+
+    colors = px.colors.qualitative.Dark24
+
+    for i, rec in enumerate(stats_records):
+        irg = rec["SubRegion"]
+
+        if show_irg is not None and irg not in show_irg:
+            continue
+
+        clr = colors[i % len(colors)]
+
+        if prop == 'D':
+            lbl = f"SL {rec['counts']['n_D_SL_pairs_obs']}, Q {rec['counts']['n_D_Q_pairs_obs']}"
+        elif prop == 'SL':
+            lbl = f"D {rec['counts']['n_D_SL_pairs_obs']}, Q {rec['counts']['n_SL_Q_pairs_obs']}"
+        elif prop == 'Q':
+            lbl = f"D {rec['counts']['n_D_Q_pairs_obs']}, SL {rec['counts']['n_SL_Q_pairs_obs']}"
+
+        obs = rec["properties"][prop]["observed"]
+        comp = rec["properties"][prop]["completed"]
+
+        #
+        # Observed
+        #
+        if show_observed and len(obs["pdf_density"]) > 0:
+
+            x_obs = obs["pdf_bins"][:-1]
+            y_obs = obs["pdf_density"]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_obs,
+                    y=y_obs,
+                    mode="lines",
+                    line=dict(
+                        color=clr,
+                        dash="dash",
+                        width=2,
+                    ),
+                    line_shape="hv",
+                    name=f"IRG {irg} Obs ({lbl})",
+                    legendgroup=f"IRG{irg}",
+                )
+            )
+
+        #
+        # Completed
+        #
+        if show_completed and len(comp["pdf_density"]) > 0:
+
+            x_comp = comp["pdf_bins"][:-1]
+            y_comp = comp["pdf_density"]
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_comp,
+                    y=y_comp,
+                    mode="lines",
+                    line=dict(
+                        color=clr,
+                        dash="solid",
+                        width=2,
+                    ),
+                    line_shape="hv",
+                    fill="tozeroy",
+                    opacity=alpha,
+                    name=f"IRG {irg} Imp ({rec['counts']['n_accepted']}/{rec['counts']['n_wells']})",
+                    legendgroup=f"IRG{irg}",
+                )
+            )
+
+    prop_names = {
+        "D": "Depth",
+        "SL": "Screen Length",
+        "Q": "Well Yield",
+    }
+
+    fig.update_layout(
+        title=f"{prop_names.get(prop, prop)} PDF Comparison",
+        xaxis_title=prop_names.get(prop, prop),
+        yaxis_title="Probability Density",
+        template="plotly_dark",
+        height=600,
+        width=800,
     )
 
     return fig

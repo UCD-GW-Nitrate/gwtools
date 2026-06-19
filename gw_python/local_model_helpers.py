@@ -1,9 +1,12 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from shapely.geometry import Polygon, MultiPolygon
+from shapely.geometry import Polygon, MultiPolygon, Point
 from shapely import affinity
 import geopandas as gpd
+from collections import defaultdict
+from shapely.ops import unary_union
+from tqdm import tqdm
 from collections import defaultdict
 
 def minimum_integer_angle_rectangle(geom, angle_step=1):
@@ -611,3 +614,193 @@ def average_monthly_gwh_by_period(gwh, start_year, end_year):
         monthly_avg.append(avg)
 
     return monthly_avg
+
+def jitter_points_with_constraints(
+    point_gdf,
+    polygon_outline = None,
+    existing_points=None,
+    jitter_threshold=1.6 / 2,
+    pnt_dist=400,
+    bnd_dist=400,
+    n_attempts=20,
+    relax_coef=0.75,
+    min_pnt_dist=100,
+    min_bnd_dist=100,
+    random_seed=None,
+    jittered_flag="Jittered",
+):
+    """
+    Randomly jitter point locations within a square centered on each original point,
+    while enforcing minimum point-to-point and point-to-boundary distances.
+
+    Parameters
+    ----------
+    point_gdf : geopandas.GeoDataFrame
+        Input point GeoDataFrame.
+    polygon_outline : geopandas.GeoDataFrame or shapely Polygon/MultiPolygon
+        Polygon boundary within which jittered points must remain.
+    jitter_threshold : float
+        Half-size of jitter square in map units. New x/y are sampled from
+        [x - jitter_threshold, x + jitter_threshold] and
+        [y - jitter_threshold, y + jitter_threshold].
+    pnt_dist : float
+        Initial minimum allowed distance between jittered points.
+    bnd_dist : float
+        Initial minimum allowed distance from polygon boundary.
+    n_attempts : int
+        Number of attempts before relaxing distance thresholds.
+    relax_coef : float
+        Multiplicative relaxation factor, e.g. 0.9 reduces thresholds by 10%.
+    min_pnt_dist : float
+        Minimum point-distance threshold. If relaxed below this, the point is skipped.
+    min_bnd_dist : float
+        Minimum boundary-distance threshold. If relaxed below this, the point is skipped.
+    random_seed : int or None
+        Optional random seed.
+    jittered_flag : str
+        Name of output boolean flag field.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Copy of point_gdf with updated geometries and a boolean flag indicating
+        whether each point was successfully jittered.
+    """
+
+    rng = np.random.default_rng(random_seed)
+
+    out_gdf = point_gdf.copy()
+    out_gdf[jittered_flag] = False
+
+    use_boundary = polygon_outline is not None
+
+    if use_boundary:
+        if isinstance(polygon_outline, gpd.GeoDataFrame):
+            poly = polygon_outline.geometry.union_all()
+        else:
+            poly = polygon_outline
+
+        boundary = poly.boundary
+    else:
+        poly = None
+        boundary = None
+
+    # Fixed grid based on the minimum point distance.
+    # We use min_pnt_dist so the same grid remains valid after relaxation.
+    cell_size = float(min_pnt_dist)
+    if cell_size <= 0:
+        raise ValueError("min_pnt_dist must be > 0")
+
+    grid = defaultdict(list)
+
+    def cell_id(x, y):
+        return int(np.floor(x / cell_size)), int(np.floor(y / cell_size))
+
+    def add_to_grid(x, y):
+        grid[cell_id(x, y)].append((x, y))
+
+    def too_close_to_existing(x, y, dist):
+        dist2 = dist * dist
+        ix, iy = cell_id(x, y)
+
+        # Because cell_size may be smaller than dist, search enough cells
+        # to cover the active distance threshold.
+        ncell = int(np.ceil(dist / cell_size))
+
+        for gx in range(ix - ncell, ix + ncell + 1):
+            for gy in range(iy - ncell, iy + ncell + 1):
+                for xp, yp in grid.get((gx, gy), []):
+                    dx = x - xp
+                    dy = y - yp
+                    if dx * dx + dy * dy < dist2:
+                        return True
+
+        return False
+
+    # Add existing points to grid
+    if existing_points is not None:
+        if isinstance(existing_points, gpd.GeoDataFrame):
+            geoms = existing_points.geometry.dropna()
+        else:
+            geoms = existing_points
+
+        for p in geoms:
+            if p is not None and not p.is_empty:
+                add_to_grid(p.x, p.y)
+
+    for idx, row in tqdm(
+            out_gdf.iterrows(),
+            total=len(out_gdf),
+            desc="Jittering points",
+    ):
+        if row.geometry is None or row.geometry.is_empty:
+            continue
+
+        x0 = row.geometry.x
+        y0 = row.geometry.y
+
+        cur_pnt_dist = float(pnt_dist)
+        cur_bnd_dist = float(bnd_dist) if use_boundary else None
+
+        accepted = False
+
+        while (
+                cur_pnt_dist >= min_pnt_dist
+                and (
+                        not use_boundary
+                        or cur_bnd_dist >= min_bnd_dist
+                )
+        ):
+            for _ in range(n_attempts):
+                x_new = x0 + rng.uniform(-jitter_threshold, jitter_threshold)
+                y_new = y0 + rng.uniform(-jitter_threshold, jitter_threshold)
+
+                if too_close_to_existing(x_new, y_new, cur_pnt_dist):
+                    continue
+
+                p_new = Point(x_new, y_new)
+
+                if use_boundary:
+                    if not poly.contains(p_new):
+                        continue
+
+                    if p_new.distance(boundary) < cur_bnd_dist:
+                        continue
+
+                out_gdf.at[idx, "geometry"] = p_new
+                out_gdf.at[idx, jittered_flag] = True
+                add_to_grid(x_new, y_new)
+
+                accepted = True
+                break
+
+            if accepted:
+                break
+
+            cur_pnt_dist *= relax_coef
+
+            if use_boundary:
+                cur_bnd_dist *= relax_coef
+
+    return out_gdf
+
+
+def discretize_polygon_boundary(polygon_outline, spacing, crs=None):
+    if isinstance(polygon_outline, gpd.GeoDataFrame):
+        crs = polygon_outline.crs
+        geom = polygon_outline.geometry.union_all()
+    else:
+        geom = polygon_outline
+
+    boundary = geom.boundary
+
+    distances = np.arange(0, boundary.length, spacing)
+    points = [boundary.interpolate(d) for d in distances]
+
+    # include final point
+    points.append(boundary.interpolate(boundary.length))
+
+    return gpd.GeoDataFrame(
+        geometry=points,
+        crs=crs,
+    )
