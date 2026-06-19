@@ -528,107 +528,170 @@ def impute_D_SL_Q(
 
     return D0, SL0, Q0, False, max_iter
 
-def _positive_values(df, field):
+def positive_values(df, field):
+    """Return finite positive numeric values from a dataframe field."""
     vals = pd.to_numeric(df[field], errors="coerce").to_numpy(dtype=float)
-    vals = vals[np.isfinite(vals) & (vals > 0)]
-    return vals
+    return vals[np.isfinite(vals) & (vals > 0)]
+
+def count_positive_pairs(df, field_a, field_b):
+    """Count rows where both fields are finite positive values."""
+    a = pd.to_numeric(df[field_a], errors="coerce")
+    b = pd.to_numeric(df[field_b], errors="coerce")
+
+    return int(((a > 0) & (b > 0)).sum())
 
 
-def _basic_dist_stats(vals, prefix):
+def basic_dist_stats(vals, n_pdf_bins=30):
+    """
+    Return scalar stats, ECDF arrays, and PDF histogram arrays.
+    Suitable for pickle storage.
+    """
     vals = np.asarray(vals, dtype=float)
     vals = vals[np.isfinite(vals) & (vals > 0)]
 
-    out = {
-        f"{prefix}_n": len(vals),
-        f"{prefix}_mean": np.nan,
-        f"{prefix}_std": np.nan,
-        f"{prefix}_min": np.nan,
-        f"{prefix}_p05": np.nan,
-        f"{prefix}_p25": np.nan,
-        f"{prefix}_p50": np.nan,
-        f"{prefix}_p75": np.nan,
-        f"{prefix}_p95": np.nan,
-        f"{prefix}_max": np.nan,
-        f"{prefix}_ecdf_x": np.array([]),
-        f"{prefix}_ecdf_y": np.array([]),
-        f"{prefix}_pdf_bins": np.array([]),
-        f"{prefix}_pdf_density": np.array([]),
+    stats = {
+        "n": int(len(vals)),
+        "mean": np.nan,
+        "std": np.nan,
+        "min": np.nan,
+        "p05": np.nan,
+        "p25": np.nan,
+        "p50": np.nan,
+        "p75": np.nan,
+        "p95": np.nan,
+        "max": np.nan,
+        "ecdf_x": np.array([], dtype=float),
+        "ecdf_y": np.array([], dtype=float),
+        "pdf_bins": np.array([], dtype=float),
+        "pdf_density": np.array([], dtype=float),
     }
 
     if len(vals) == 0:
-        return out
+        return stats
 
     vals_sort = np.sort(vals)
 
-    out[f"{prefix}_mean"] = np.mean(vals)
-    out[f"{prefix}_std"] = np.std(vals)
-    out[f"{prefix}_min"] = np.min(vals)
-    out[f"{prefix}_p05"] = np.percentile(vals, 5)
-    out[f"{prefix}_p25"] = np.percentile(vals, 25)
-    out[f"{prefix}_p50"] = np.percentile(vals, 50)
-    out[f"{prefix}_p75"] = np.percentile(vals, 75)
-    out[f"{prefix}_p95"] = np.percentile(vals, 95)
-    out[f"{prefix}_max"] = np.max(vals)
+    stats.update({
+        "mean": float(np.mean(vals)),
+        "std": float(np.std(vals)),
+        "min": float(np.min(vals)),
+        "p05": float(np.percentile(vals, 5)),
+        "p25": float(np.percentile(vals, 25)),
+        "p50": float(np.percentile(vals, 50)),
+        "p75": float(np.percentile(vals, 75)),
+        "p95": float(np.percentile(vals, 95)),
+        "max": float(np.max(vals)),
+        "ecdf_x": vals_sort,
+        "ecdf_y": np.arange(1, len(vals_sort) + 1) / len(vals_sort),
+    })
 
-    out[f"{prefix}_ecdf_x"] = vals_sort
-    out[f"{prefix}_ecdf_y"] = np.arange(1, len(vals_sort) + 1) / len(vals_sort)
+    pdf_density, pdf_bins = np.histogram(
+        vals,
+        bins=n_pdf_bins,
+        density=True
+    )
 
-    pdf_density, pdf_edges = np.histogram(vals, bins=30, density=True)
-    out[f"{prefix}_pdf_bins"] = pdf_edges
-    out[f"{prefix}_pdf_density"] = pdf_density
+    stats["pdf_bins"] = pdf_bins
+    stats["pdf_density"] = pdf_density
 
-    return out
+    return stats
 
 
-def make_region_stats(ireg, group_name, wcr_obs, completed_df,
-    D_fld = "TOTALCOMPLETEDDEPTH",
-    SL_fld = "ScreenLength",
-    Q_fld = "WELLYIELD",
+def make_region_stats(
+    ireg,
+    group_name,
+    wcr_obs,
+    completed_df,
+    D_fld="TOTALCOMPLETEDDEPTH",
+    SL_fld="ScreenLength",
+    Q_fld="WELLYIELD",
+    n_pdf_bins=30,
 ):
-    rec = {
-        "SubRegion": ireg + 1,
+    """
+    Create hierarchical QA/QC statistics for one subregion and well group.
+
+    Returns
+    -------
+    dict
+        Nested dictionary suitable for pickle storage.
+    """
+    stats = {
+        "SubRegion": int(ireg + 1),
         "Group": group_name,
-        "n_wells": len(wcr_obs),
-        "n_D_obs": len(_positive_values(wcr_obs, D_fld)),
-        "n_SL_obs": len(_positive_values(wcr_obs, SL_fld)),
-        "n_Q_obs": len(_positive_values(wcr_obs, Q_fld)),
-        "n_D_Q_pairs_obs": len(
-            wcr_obs[
-                (pd.to_numeric(wcr_obs[D_fld], errors="coerce") > 0) &
-                (pd.to_numeric(wcr_obs[Q_fld], errors="coerce") > 0)
-            ]
-        ),
-        "n_D_SL_pairs_obs": len(
-            wcr_obs[
-                (pd.to_numeric(wcr_obs[D_fld], errors="coerce") > 0) &
-                (pd.to_numeric(wcr_obs[SL_fld], errors="coerce") > 0)
-            ]
-        ),
-        "n_SL_Q_pairs_obs": len(
-            wcr_obs[
-                (pd.to_numeric(wcr_obs[SL_fld], errors="coerce") > 0) &
-                (pd.to_numeric(wcr_obs[Q_fld], errors="coerce") > 0)
-            ]
-        ),
-        "n_accepted": int(completed_df["Accepted"].sum()) if len(completed_df) > 0 else 0,
-        "mean_n_iter": completed_df["NIter"].mean() if len(completed_df) > 0 else np.nan,
+
+        "counts": {
+            "n_wells": int(len(wcr_obs)),
+
+            "n_D_obs": int(len(positive_values(wcr_obs, D_fld))),
+            "n_SL_obs": int(len(positive_values(wcr_obs, SL_fld))),
+            "n_Q_obs": int(len(positive_values(wcr_obs, Q_fld))),
+
+            "n_D_Q_pairs_obs": count_positive_pairs(wcr_obs, D_fld, Q_fld),
+            "n_D_SL_pairs_obs": count_positive_pairs(wcr_obs, D_fld, SL_fld),
+            "n_SL_Q_pairs_obs": count_positive_pairs(wcr_obs, SL_fld, Q_fld),
+
+            "n_completed": int(len(completed_df)),
+            "n_accepted": (
+                int(completed_df["Accepted"].sum())
+                if len(completed_df) > 0 and "Accepted" in completed_df.columns
+                else 0
+            ),
+            "mean_n_iter": (
+                float(pd.to_numeric(completed_df["NIter"], errors="coerce").mean())
+                if len(completed_df) > 0 and "NIter" in completed_df.columns
+                else np.nan
+            ),
+        },
+
+        "properties": {},
     }
 
     field_map = {
-        "D": (D_fld, "Depth"),
-        "SL": (SL_fld, "SL"),
-        "Q": (Q_fld, "Wyield"),
+        "D": {
+            "observed_field": D_fld,
+            "completed_field": "Depth",
+            "description": "Completed depth",
+        },
+        "SL": {
+            "observed_field": SL_fld,
+            "completed_field": "SL",
+            "description": "Screen length",
+        },
+        "Q": {
+            "observed_field": Q_fld,
+            "completed_field": "Wyield",
+            "description": "Well yield",
+        },
     }
 
-    for short_name, (obs_field, comp_field) in field_map.items():
-        obs_vals = _positive_values(wcr_obs, obs_field)
-        comp_vals = pd.to_numeric(completed_df[comp_field], errors="coerce").to_numpy(dtype=float)
-        comp_vals = comp_vals[np.isfinite(comp_vals) & (comp_vals > 0)]
+    for prop, fmap in field_map.items():
+        obs_vals = positive_values(
+            wcr_obs,
+            fmap["observed_field"]
+        )
 
-        rec.update(_basic_dist_stats(obs_vals, f"{short_name}_obs"))
-        rec.update(_basic_dist_stats(comp_vals, f"{short_name}_completed"))
+        if len(completed_df) > 0 and fmap["completed_field"] in completed_df.columns:
+            comp_vals = pd.to_numeric(
+                completed_df[fmap["completed_field"]],
+                errors="coerce"
+            ).to_numpy(dtype=float)
 
-    return rec
+            comp_vals = comp_vals[
+                np.isfinite(comp_vals) &
+                (comp_vals > 0)
+                ]
+        else:
+            comp_vals = np.array([], dtype=float)
+
+        stats["properties"][prop] = {
+            "description": fmap["description"],
+            "observed_field": fmap["observed_field"],
+            "completed_field": fmap["completed_field"],
+            "observed": basic_dist_stats(obs_vals, n_pdf_bins=n_pdf_bins),
+            "completed": basic_dist_stats(comp_vals, n_pdf_bins=n_pdf_bins),
+        }
+
+    return stats
 
 
 def _as_plot_array(v):
