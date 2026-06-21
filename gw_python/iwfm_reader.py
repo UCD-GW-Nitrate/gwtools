@@ -967,8 +967,8 @@ def read_iwfm_gw_recharge(filename):
         c2vs_dv_p = f[f'Layer_{1}/Diversion Recoverable Loss_Inflow (+)'][:].transpose()
         c2vs_dv_m = f[f'Layer_{1}/Diversion Recoverable Loss_Outflow (-)'][:].transpose()
         # tl tile drains
-        c2vs_tl_p = f[f'Layer_{1}/Tile Drains_Outflow (-)'][:].transpose()
-        c2vs_tl_m = f[f'Layer_{1}/Tile Drains_Inflow (+)'][:].transpose()
+        c2vs_tl_p = f[f'Layer_{1}/Tile Drains_Inflow (+)'][:].transpose()
+        c2vs_tl_m = f[f'Layer_{1}/Tile Drains_Outflow (-)'][:].transpose()
         # element areas
         elem_area = f['Attributes/SystemData%ElementAreas'][:]
         elem_area_m2 = elem_area * 0.092903

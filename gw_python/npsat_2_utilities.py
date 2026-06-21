@@ -555,3 +555,392 @@ def read_npsat_mesh(filename):
 
     return xy, ids
 
+
+def _values_to_4d(Values):
+    """
+    Return Values as (ntime, nrow, ncol, nlay).
+    """
+    Values = np.asarray(Values)
+
+    if Values.ndim == 2:
+        # (nrow, ncol)
+        return Values[np.newaxis, :, :, np.newaxis]
+
+    if Values.ndim == 3:
+        # (nrow, ncol, nlay)
+        return Values[np.newaxis, :, :, :]
+
+    if Values.ndim == 4:
+        # (ntime, nrow, ncol, nlay)
+        return Values
+
+    raise ValueError(
+        "Values must be 2D (nrow, ncol), "
+        "3D (nrow, ncol, nlay), or "
+        "4D (ntime, nrow, ncol, nlay)"
+    )
+
+
+def _ids_to_3d(IDs):
+    """
+    Return IDs as (nlay, nrow, ncol).
+    """
+    IDs = np.asarray(IDs)
+
+    if IDs.ndim == 2:
+        return IDs[np.newaxis, :, :]
+
+    if IDs.ndim == 3:
+        return IDs
+
+    raise ValueError("IDs must be 2D (nrow, ncol) or 3D (nlay, nrow, ncol)")
+
+
+def _elev_to_3d(Elev, nrow, ncol):
+    """
+    Return Elev as (nelev, nrow, ncol), or None.
+    """
+    elev_is_empty = Elev is None or np.asarray(Elev).size == 0
+
+    if elev_is_empty:
+        return None
+
+    Elev = np.asarray(Elev)
+
+    if Elev.ndim == 2:
+        Elev_3d = Elev[np.newaxis, :, :]
+
+    elif Elev.ndim == 3:
+        # Accept either (nelev, nrow, ncol) or (nrow, ncol, nelev)
+        if Elev.shape[1:] == (nrow, ncol):
+            Elev_3d = Elev
+        elif Elev.shape[:2] == (nrow, ncol):
+            Elev_3d = np.moveaxis(Elev, 2, 0)
+        else:
+            raise ValueError(
+                f"Elev shape {Elev.shape} is incompatible with "
+                f"(nrow, ncol)=({nrow}, {ncol})"
+            )
+
+    else:
+        raise ValueError("Elev must be None, empty, 2D, or 3D")
+
+    if Elev_3d.shape[1:] != (nrow, ncol):
+        raise ValueError(
+            f"Elev grid shape {Elev_3d.shape[1:]} does not match "
+            f"grid shape {(nrow, ncol)}"
+        )
+
+    return Elev_3d
+
+
+def write_gridded_interpolant(prefix, IDs, Elev, grid, values, return_filenames=False):
+    """
+    Write gridded interpolant files:
+      prefix_gridded_grid.dat
+      prefix_gridded_data.dat
+
+    IDs
+        2D: (nrow, ncol)
+        3D: (nlay, nrow, ncol)
+
+    Elev
+        None, empty, 2D, or 3D.
+        3D may be either:
+          (nelev, nrow, ncol)
+        or:
+          (nrow, ncol, nelev)
+
+    values
+        Usually 2D:
+          (n_id, ntime)
+
+        A 1D array is written as one column.
+    """
+
+    prefix = Path(prefix)
+
+    grid_filename = prefix.with_name(prefix.name + "_gridded_grid.dat")
+    data_filename = prefix.with_name(prefix.name + "_gridded_data.dat")
+
+    IDs_3d = _ids_to_3d(IDs)
+    nlay, nrow, ncol = IDs_3d.shape
+
+    Elev_3d = _elev_to_3d(Elev, nrow, ncol)
+
+    values = np.asarray(values)
+
+    if values.ndim == 1:
+        values = values[:, np.newaxis]
+
+    if values.ndim != 2:
+        raise ValueError("values must be 1D or 2D, usually (n_id, ntime)")
+
+    required_keys = ["xorig", "yorig", "dx", "dy"]
+    for key in required_keys:
+        if key not in grid:
+            raise KeyError(f"grid dictionary is missing key: {key}")
+
+    with open(grid_filename, "w") as f:
+        f.write(f"{float(grid['xorig']):.6g} {ncol}\n")
+        f.write(f"{float(grid['yorig']):.6g} {nrow}\n")
+        f.write(f"{float(grid['dx']):.6g} {float(grid['dy']):.6g}\n")
+        f.write(f"{nlay}\n")
+
+        for ilay in range(nlay):
+            np.savetxt(f, IDs_3d[ilay], fmt="%d")
+
+            if Elev_3d is not None:
+                elev_idx = min(ilay, Elev_3d.shape[0] - 1)
+                np.savetxt(f, Elev_3d[elev_idx], fmt="%.12g")
+
+    np.savetxt(data_filename, values, fmt="%.12g")
+
+    if return_filenames:
+        return str(grid_filename.name), str(data_filename.name)
+
+
+def write_partitioned_gridded_interpolant(
+    prefix,
+    Values,
+    Elev,
+    xorig,
+    yorig,
+    dx,
+    dy,
+    NR,
+    NC,
+    return_filenames=False,
+    zero_tol=0.0,
+):
+    """
+    Write partitioned gridded interpolants, storing data only for nonzero cells.
+
+    Values accepted shapes:
+      (nrow, ncol)
+      (nrow, ncol, nlay)
+      (ntime, nrow, ncol, nlay)
+
+    Internally treated as:
+      (ntime, nrow, ncol, nlay)
+
+    For each subregion:
+      - inactive / zero cells receive ID = -1
+      - active cells receive IDs 0, 1, ..., n_active-1
+      - data file has only n_active rows
+    """
+
+    prefix = Path(prefix)
+    master_filename = prefix.with_name(prefix.name + "_master.dat")
+
+    Values_4d = _values_to_4d(Values)
+    ntime, nrow, ncol, nlay = Values_4d.shape
+
+    Elev_3d = _elev_to_3d(Elev, nrow, ncol)
+
+    row_blocks = np.array_split(np.arange(nrow), NR)
+    col_blocks = np.array_split(np.arange(ncol), NC)
+
+    x_edges = xorig + np.arange(ncol + 1) * dx
+    y_edges = yorig + np.arange(nrow + 1) * dy
+
+    region_records = []
+    master_lines = []
+
+    for ir, rows in enumerate(row_blocks):
+        for ic, cols in enumerate(col_blocks):
+
+            r0, r1 = rows[0], rows[-1] + 1
+            c0, c1 = cols[0], cols[-1] + 1
+
+            sub_values = Values_4d[:, r0:r1, c0:c1, :]
+            _, sub_nrow, sub_ncol, sub_nlay = sub_values.shape
+
+            # Active if any timestep is nonzero for that row/col/layer
+            active_rc_lay = np.any(
+                np.isfinite(sub_values) & (np.abs(sub_values) > zero_tol),
+                axis=0
+            )  # shape: (sub_nrow, sub_ncol, sub_nlay)
+
+            n_active = int(np.count_nonzero(active_rc_lay))
+
+            # Skip completely zero subregions
+            if n_active == 0:
+                continue
+
+            # IDs in row-col-layer layout first
+            sub_ids_rc_lay = np.full(
+                (sub_nrow, sub_ncol, sub_nlay),
+                -1,
+                dtype=int
+            )
+
+            sub_ids_rc_lay[active_rc_lay] = np.arange(n_active, dtype=int)
+
+            # Convert to layer-row-col layout expected by write_gridded_interpolant
+            sub_ids = np.moveaxis(sub_ids_rc_lay, 2, 0)
+
+            # Data table: n_active x ntime
+            # This ordering is consistent with active_rc_lay boolean indexing.
+            sub_data = np.zeros((n_active, ntime), dtype=float)
+
+            for itime in range(ntime):
+                sub_data[:, itime] = sub_values[itime][active_rc_lay]
+
+            if Elev_3d is None:
+                sub_elev = None
+            else:
+                sub_elev = Elev_3d[:, r0:r1, c0:c1]
+
+            sub_prefix = prefix.with_name(
+                f"{prefix.name}_r{ir:03d}_c{ic:03d}"
+            )
+
+            sub_grid = {
+                "xorig": xorig + c0 * dx,
+                "yorig": yorig + r0 * dy,
+                "dx": dx,
+                "dy": dy,
+            }
+
+            grid_file, data_file = write_gridded_interpolant(
+                sub_prefix,
+                sub_ids,
+                sub_elev,
+                sub_grid,
+                sub_data,
+                return_filenames=True,
+            )
+
+            xmin = min(x_edges[c0], x_edges[c1])
+            xmax = max(x_edges[c0], x_edges[c1])
+            ymin = min(y_edges[r0], y_edges[r1])
+            ymax = max(y_edges[r0], y_edges[r1])
+
+            master_lines.append(
+                f"2 GRIDDED {grid_file} {data_file}\n"
+                f"{xmin:.6f} {ymin:.6f}\n"
+                f"{xmax:.6f} {ymax:.6f}\n"
+            )
+
+            region_records.append({
+                "ir": ir,
+                "ic": ic,
+                "row_start": r0,
+                "row_end": r1,
+                "col_start": c0,
+                "col_end": c1,
+                "ntime": ntime,
+                "nlay": sub_nlay,
+                "n_active": n_active,
+                "grid_file": grid_file,
+                "data_file": data_file,
+                "xmin": xmin,
+                "ymin": ymin,
+                "xmax": xmax,
+                "ymax": ymax,
+            })
+
+    with open(master_filename, "w") as fmaster:
+        fmaster.write(f"{len(master_lines)}\n")
+        for line in master_lines:
+            fmaster.write(line)
+
+    if return_filenames:
+        return str(master_filename.name), region_records
+
+
+def calc_relative_layer_positions(elev, top_elev):
+    """
+    Calculate relative vertical positions of intermediate layer elevations
+    between top_elev and the bottom elevation elev[:, -1].
+
+    Returns
+    -------
+    vert_rel : np.ndarray
+        Array with shape (n_nodes, n_elev - 2).
+
+        Relative position is:
+            0 at top_elev
+            1 at bottom elevation
+
+        Example:
+            top = 100, bottom = 0, intermediates = 75, 50, 25
+            returns [0.25, 0.50, 0.75]
+
+    Notes
+    -----
+    If one or more intermediate elevations are above top_elev, those
+    positions are redistributed evenly between top_elev and the first
+    intermediate elevation below top_elev.
+    """
+
+    elev = np.asarray(elev, dtype=float)
+    top_elev = np.asarray(top_elev, dtype=float)
+
+    if elev.ndim != 2:
+        raise ValueError("elev must be a 2D array with shape (n_nodes, n_elev)")
+
+    n_nodes, n_elev = elev.shape
+
+    if n_elev < 3:
+        raise ValueError("elev must have at least 3 columns: top, intermediate, bottom")
+
+    if top_elev.shape[0] != n_nodes:
+        raise ValueError("top_elev must have length n_nodes")
+
+    bot_elev = elev[:, -1]
+    mid_elev = elev[:, 1:-1]
+
+    vert_rel = np.full((n_nodes, n_elev - 2), np.nan, dtype=float)
+
+    for i in range(n_nodes):
+
+        top = top_elev[i]
+        bot = bot_elev[i]
+        mids = mid_elev[i, :].copy()
+
+        den = top - bot
+
+        if not np.isfinite(den) or den == 0:
+            continue
+
+        # Standard relative positions
+        rel = (top - mids) / den
+
+        # Find intermediates that are above top_elev
+        above = mids > top
+
+        if np.any(above):
+
+            # First layer that is below or equal to top_elev
+            below_idx = np.where(mids <= top)[0]
+
+            if below_idx.size == 0:
+                # All intermediate layers are above top_elev.
+                # Distribute them evenly between top and bottom.
+                rel = np.linspace(
+                    0,
+                    1,
+                    n_elev
+                )[1:-1]
+
+            else:
+                k = below_idx[0]
+
+                # Relative position of first valid below-top layer
+                rel_k = (top - mids[k]) / den
+
+                # Distribute layers 0..k-1 evenly between 0 and rel_k
+                rel[:k] = np.linspace(
+                    0,
+                    rel_k,
+                    k + 2
+                )[1:-1]
+
+                # Keep normal relative positions from k onward
+                rel[k:] = (top - mids[k:]) / den
+
+        vert_rel[i, :] = rel
+
+    return vert_rel
