@@ -634,7 +634,9 @@ def _elev_to_3d(Elev, nrow, ncol):
     return Elev_3d
 
 
-def write_gridded_interpolant(prefix, IDs, Elev, grid, values, return_filenames=False):
+def write_gridded_interpolant(prefix, IDs, Elev, grid, values,
+                              return_filenames=False,
+                              raster_order=True,):
     """
     Write gridded interpolant files:
       prefix_gridded_grid.dat
@@ -664,9 +666,15 @@ def write_gridded_interpolant(prefix, IDs, Elev, grid, values, return_filenames=
     data_filename = prefix.with_name(prefix.name + "_gridded_data.dat")
 
     IDs_3d = _ids_to_3d(IDs)
+
     nlay, nrow, ncol = IDs_3d.shape
 
     Elev_3d = _elev_to_3d(Elev, nrow, ncol)
+
+    if raster_order:
+        IDs_3d = IDs_3d[:, ::-1, :]
+        if Elev_3d is not None:
+            Elev_3d = Elev_3d[:, ::-1, :]
 
     values = np.asarray(values)
 
@@ -810,6 +818,7 @@ def write_partitioned_gridded_interpolant(
                 sub_grid,
                 sub_data,
                 return_filenames=True,
+                raster_order=True
             )
 
             xmin = min(x_edges[c0], x_edges[c1])
