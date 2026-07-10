@@ -795,6 +795,7 @@ def write_partitioned_gridded_interpolant(
             for itime in range(ntime):
                 sub_data[:, itime] = sub_values[itime][active_rc_lay]
 
+
             if Elev_3d is None:
                 sub_elev = None
             else:
@@ -806,7 +807,7 @@ def write_partitioned_gridded_interpolant(
 
             sub_grid = {
                 "xorig": xorig + c0 * dx,
-                "yorig": yorig + r0 * dy,
+                "yorig": yorig + (nrow - r1)*dy, #yorig + r0 * dy,
                 "dx": dx,
                 "dy": dy,
             }
@@ -823,8 +824,8 @@ def write_partitioned_gridded_interpolant(
 
             xmin = min(x_edges[c0], x_edges[c1])
             xmax = max(x_edges[c0], x_edges[c1])
-            ymin = min(y_edges[r0], y_edges[r1])
-            ymax = max(y_edges[r0], y_edges[r1])
+            ymin = yorig + (nrow - r1)*dy #min(y_edges[r0], y_edges[r1])
+            ymax = yorig + (nrow - r0)*dy #max(y_edges[r0], y_edges[r1])
 
             master_lines.append(
                 f"2 GRIDDED {grid_file} {data_file}\n"
