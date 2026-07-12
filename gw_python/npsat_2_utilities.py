@@ -860,23 +860,31 @@ def write_partitioned_gridded_interpolant(
         return str(master_filename.name), region_records
 
 
-def calc_relative_layer_positions(elev, top_elev):
+def calc_relative_layer_positions(elev, top_elev, direction="top2bot"):
     """
-    Calculate relative vertical positions of intermediate layer elevations
-    between top_elev and the bottom elevation elev[:, -1].
+    Calculate relative vertical positions of intermediate layer elevations.
+
+    Parameters
+    ----------
+    elev : (n_nodes, n_elev) array
+        Elevation array. The last column is the bottom elevation.
+    top_elev : (n_nodes,) array
+        Top elevation.
+    direction : {"top2bot", "bot2top"}, optional
+        Defines the returned relative coordinate.
+
+        "top2bot" (default):
+            0 at top
+            1 at bottom
+
+        "bot2top":
+            0 at bottom
+            1 at top
 
     Returns
     -------
     vert_rel : np.ndarray
-        Array with shape (n_nodes, n_elev - 2).
-
-        Relative position is:
-            0 at top_elev
-            1 at bottom elevation
-
-        Example:
-            top = 100, bottom = 0, intermediates = 75, 50, 25
-            returns [0.25, 0.50, 0.75]
+        Array with shape (n_nodes, n_elev-2).
 
     Notes
     -----
@@ -884,6 +892,9 @@ def calc_relative_layer_positions(elev, top_elev):
     positions are redistributed evenly between top_elev and the first
     intermediate elevation below top_elev.
     """
+
+    if direction not in ("top2bot", "bot2top"):
+        raise ValueError("direction must be 'top2bot' or 'bot2top'")
 
     elev = np.asarray(elev, dtype=float)
     top_elev = np.asarray(top_elev, dtype=float)
@@ -915,41 +926,33 @@ def calc_relative_layer_positions(elev, top_elev):
         if not np.isfinite(den) or den == 0:
             continue
 
-        # Standard relative positions
+        # Standard relative positions (0=top, 1=bottom)
         rel = (top - mids) / den
 
-        # Find intermediates that are above top_elev
+        # Find intermediates above the top elevation
         above = mids > top
 
         if np.any(above):
 
-            # First layer that is below or equal to top_elev
             below_idx = np.where(mids <= top)[0]
 
             if below_idx.size == 0:
-                # All intermediate layers are above top_elev.
-                # Distribute them evenly between top and bottom.
-                rel = np.linspace(
-                    0,
-                    1,
-                    n_elev
-                )[1:-1]
+                # All intermediate layers are above the top.
+                rel = np.linspace(0.0, 1.0, n_elev)[1:-1]
 
             else:
                 k = below_idx[0]
 
-                # Relative position of first valid below-top layer
                 rel_k = (top - mids[k]) / den
 
-                # Distribute layers 0..k-1 evenly between 0 and rel_k
-                rel[:k] = np.linspace(
-                    0,
-                    rel_k,
-                    k + 2
-                )[1:-1]
+                # Redistribute layers above top evenly
+                rel[:k] = np.linspace(0.0, rel_k, k + 2)[1:-1]
 
-                # Keep normal relative positions from k onward
+                # Remaining layers keep their geometric position
                 rel[k:] = (top - mids[k:]) / den
+
+        if direction == "bot2top":
+            rel = 1.0 - rel[::-1]
 
         vert_rel[i, :] = rel
 

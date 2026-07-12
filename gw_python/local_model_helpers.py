@@ -804,3 +804,171 @@ def discretize_polygon_boundary(polygon_outline, spacing, crs=None):
         geometry=points,
         crs=crs,
     )
+
+def write_vertical_lines_vtp(df, fields, filename, copy_attributes=True):
+    """
+    Write a VTK PolyData (.vtp) file containing one vertical line per row.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input dataframe.
+
+    fields : dict
+        Dictionary mapping the coordinate fields, e.g.
+
+        {
+            "x": "X",
+            "y": "Y",
+            "top": "TOP",
+            "bottom": "BOTTOM"
+        }
+
+    filename : str or Path
+        Output .vtp filename.
+
+    copy_attributes : bool, default=True
+        If True, all remaining dataframe columns are written
+        as cell data.
+
+    Returns
+    -------
+    None
+    """
+
+    required = ("x", "y", "top", "bottom")
+    for key in required:
+        if key not in fields:
+            raise ValueError(f"Missing '{key}' in fields.")
+
+    x = df[fields["x"]].to_numpy(float)
+    y = df[fields["y"]].to_numpy(float)
+    top = df[fields["top"]].to_numpy(float)
+    bot = df[fields["bottom"]].to_numpy(float)
+
+    nlines = len(df)
+    npoints = 2 * nlines
+
+    # ------------------------------------------------------------------
+    # Points
+    # ------------------------------------------------------------------
+
+    pts = np.empty((npoints, 3), float)
+
+    pts[0::2, 0] = x
+    pts[0::2, 1] = y
+    pts[0::2, 2] = top
+
+    pts[1::2, 0] = x
+    pts[1::2, 1] = y
+    pts[1::2, 2] = bot
+
+    # connectivity
+    connectivity = np.column_stack([
+        np.arange(0, npoints, 2),
+        np.arange(1, npoints, 2)
+    ])
+
+    offsets = np.arange(2, 2 * nlines + 1, 2)
+
+    used_fields = set(fields.values())
+
+    with open(filename, "w") as f:
+
+        f.write('<?xml version="1.0"?>\n')
+        f.write(
+            '<VTKFile type="PolyData" version="0.1" byte_order="LittleEndian">\n'
+        )
+        f.write("  <PolyData>\n")
+        f.write(
+            f'    <Piece NumberOfPoints="{npoints}" '
+            f'NumberOfLines="{nlines}">\n'
+        )
+
+        # --------------------------------------------------------------
+        # Points
+        # --------------------------------------------------------------
+
+        f.write("      <Points>\n")
+        f.write(
+            '        <DataArray type="Float64" '
+            'NumberOfComponents="3" format="ascii">\n'
+        )
+
+        for p in pts:
+            f.write(f"          {p[0]} {p[1]} {p[2]}\n")
+
+        f.write("        </DataArray>\n")
+        f.write("      </Points>\n")
+
+        # --------------------------------------------------------------
+        # Lines
+        # --------------------------------------------------------------
+
+        f.write("      <Lines>\n")
+
+        f.write(
+            '        <DataArray type="Int32" Name="connectivity" format="ascii">\n'
+        )
+        for c in connectivity:
+            f.write(f"          {c[0]} {c[1]}\n")
+        f.write("        </DataArray>\n")
+
+        f.write(
+            '        <DataArray type="Int32" Name="offsets" format="ascii">\n'
+        )
+        f.write("          ")
+        f.write(" ".join(map(str, offsets)))
+        f.write("\n")
+        f.write("        </DataArray>\n")
+
+        f.write("      </Lines>\n")
+
+        # --------------------------------------------------------------
+        # Cell data
+        # --------------------------------------------------------------
+
+        f.write("      <CellData>\n")
+
+        length = np.abs(top - bot)
+        f.write(
+            '        <DataArray type="Float64" Name="length" format="ascii">\n'
+        )
+        f.write("          ")
+        f.write(" ".join(map(str, length)))
+        f.write("\n")
+        f.write("        </DataArray>\n")
+
+        if copy_attributes:
+            for col in df.columns:
+
+                if col in used_fields:
+                    continue
+
+                values = df[col].to_numpy()
+
+                if np.issubdtype(values.dtype, np.number):
+                    vtk_type = "Float64"
+                else:
+                    vtk_type = "String"
+
+                f.write(
+                    f'        <DataArray type="{vtk_type}" '
+                    f'Name="{col}" format="ascii">\n'
+                )
+
+                if vtk_type == "Float64":
+                    f.write("          ")
+                    f.write(" ".join(map(str, values)))
+                    f.write("\n")
+                else:
+                    for v in values:
+                        f.write(f"          {v}\n")
+
+                f.write("        </DataArray>\n")
+
+        f.write("      </CellData>\n")
+
+        f.write("    </Piece>\n")
+        f.write("  </PolyData>\n")
+        f.write("</VTKFile>\n")
