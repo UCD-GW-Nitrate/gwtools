@@ -131,6 +131,7 @@ def read_streams(filename, crs=3310):
     geometries = []
     R_list = []
     W_list = []
+    streams = []
 
     with open(filename, "r") as f:
         # First line: number of features
@@ -147,7 +148,15 @@ def read_streams(filename, crs=3310):
                 W = np.nan
 
             # Read nv lines of coordinates
-            coords = [tuple(map(float, f.readline().strip().split())) for _ in range(nv)]
+            coords = np.array(
+                [list(map(float, f.readline().strip().split()))
+                 for _ in range(nv)],
+                dtype=float,
+            )
+
+            # Store original coordinates
+            streams.append(coords)
+
             # coords = []
             # for _ in range(nv):
             #     x, y = map(float, f.readline().strip().split())
@@ -179,7 +188,7 @@ def read_streams(filename, crs=3310):
     gdf = gpd.GeoDataFrame({"R": R_list, "W": W_list}, geometry=geometries)
     gdf.set_crs(crs, inplace=True)
 
-    return gdf
+    return gdf, streams
 
 def read_mesh(filename):
     with open(filename, 'r') as f:
@@ -236,3 +245,207 @@ def polygon_to_avg_line(gdf):
 
     # Build new GeoDataFrame
     return gpd.GeoDataFrame(geometry=new_geoms, crs=gdf.crs)
+
+
+def read_scattered(filename):
+    """
+    Read an ASCII "SCATTERED" data file.
+
+    Expected format
+    ----------------
+    Line 1 : "SCATTERED"                      (literal keyword, mandatory)
+    Line 2 : "3D" or "2D"                     (dimensionality flag)
+    Line 3 : interpolation method(s)
+               - 3D -> "<xy_interp> <z_interp>"   e.g. "LINEAR NEAREST"
+               - 2D -> "<xy_interp>"              e.g. "LINEAR"
+    Line 4 : Nnodes  Ndata  Ntriangles
+    Next Nnodes lines (node/data block):
+               - X  Y  V1 ELEV1  V2 ELEV2 ... Vk ELEVk [V(k+1)]
+                 Ndata (from line 4) is the TOTAL number of columns after
+                 X,Y -- not a pair count. Those Ndata columns are read as
+                 (V, ELEV) pairs:
+                   - Ndata even -> Ndata/2 complete pairs, no trailing V
+                   - Ndata odd  -> (Ndata-1)/2 pairs, plus one trailing
+                                   unpaired V(k+1) with no elevation
+                 2D files are the special case Ndata=1: 0 pairs + 1 V,
+                 i.e. plain "X Y V".
+    Next Ntriangles lines : i  j  k            (1-based or 0-based node
+                                                 indices forming a triangle)
+
+    Returns
+    -------
+    dict with keys:
+        'XY'        : (Nnodes, 2)   ndarray of X,Y coordinates
+        'V'         : (Nnodes, n_value_cols) ndarray of data values, where
+                      n_value_cols = Ndata//2 (+1 if Ndata is odd)
+        'ELEV'      : (Nnodes, Ndata//2) ndarray of elevations
+                      (empty ndarray for 2D files)
+        'XYinterp'  : str, the horizontal interpolation method
+        'Zinterp'   : str or None, the vertical interpolation method
+                      (None for 2D files)
+        'triangles' : (Ntriangles, 3) ndarray of int, triangle connectivity
+    """
+    with open(filename, 'r') as f:
+        # keep only non-blank lines, strip trailing/leading whitespace
+        raw_lines = [ln.strip() for ln in f if ln.strip() != '']
+
+    if len(raw_lines) < 4:
+        raise ValueError("File is too short to be a valid SCATTERED file.")
+
+    # --- header -----------------------------------------------------
+    keyword = raw_lines[0].split()[0].upper()
+    if keyword != 'SCATTERED':
+        raise ValueError(
+            f"Expected first line to be 'SCATTERED', got '{raw_lines[0]}'"
+        )
+
+    dim = raw_lines[1].split()[0].upper()
+    if dim not in ('2D', '3D'):
+        raise ValueError(f"Expected '2D' or '3D' on line 2, got '{raw_lines[1]}'")
+
+    interp_tokens = raw_lines[2].split()
+    if dim == '3D':
+        if len(interp_tokens) < 2:
+            raise ValueError(
+                "3D files require two interpolation methods "
+                "(xy_interp z_interp) on line 3."
+            )
+        xy_interp, z_interp = interp_tokens[0], interp_tokens[1]
+    else:
+        if len(interp_tokens) < 1:
+            raise ValueError("2D files require one interpolation method on line 3.")
+        xy_interp, z_interp = interp_tokens[0], None
+
+    counts = raw_lines[3].split()
+    if len(counts) < 3:
+        raise ValueError(
+            "Line 4 must contain Nnodes, Ndata and Ntriangles."
+        )
+    Nnodes, Ndata, Ntriangles = (int(v) for v in counts[:3])
+
+    # --- node / data block -------------------------------------------
+    data_start = 4
+    data_end = data_start + Nnodes
+    node_lines = raw_lines[data_start:data_end]
+
+    if len(node_lines) != Nnodes:
+        raise ValueError(
+            f"Expected {Nnodes} node data lines, found {len(node_lines)}."
+        )
+
+    XY = np.empty((Nnodes, 2), dtype=float)
+
+    # Ndata is the TOTAL number of columns after X,Y (not a pair count).
+    # Those columns follow the pattern V1 ELEV1 V2 ELEV2 ... Vk ELEVk [V(k+1)]:
+    #   - Ndata even -> Ndata/2 complete (V, ELEV) pairs, no trailing V
+    #   - Ndata odd  -> (Ndata-1)/2 complete pairs, plus one trailing
+    #                   unpaired V(k+1) with no matching elevation
+    # (2D files naturally fall out of this with Ndata=1: 0 pairs + 1 V.)
+    n_pairs = Ndata // 2
+    has_extra = (Ndata % 2) == 1
+    n_value_cols = n_pairs + (1 if has_extra else 0)
+
+    V = np.empty((Nnodes, n_value_cols), dtype=float)
+    ELEV = np.empty((Nnodes, n_pairs), dtype=float) if dim == '3D' else np.empty((0, 0))
+
+    for i, line in enumerate(node_lines):
+        vals = [float(x) for x in line.split()]
+
+        if len(vals) < 2:
+            raise ValueError(f"Node line {i + 1} does not contain X, Y values.")
+
+        XY[i, 0], XY[i, 1] = vals[0], vals[1]
+        rest = vals[2:]
+
+        if len(rest) != Ndata:
+            raise ValueError(
+                f"Node line {i + 1} expected {Ndata} entries after X,Y "
+                f"(per header Ndata), found {len(rest)}."
+            )
+
+        pairs = rest[:2 * n_pairs]
+        V[i, :n_pairs] = pairs[0::2]
+        if dim == '3D':
+            ELEV[i, :] = pairs[1::2]
+        if has_extra:
+            V[i, n_pairs] = rest[2 * n_pairs]  # trailing V(k+1), no elevation
+
+    # --- triangle block -------------------------------------------------
+    tri_start = data_end
+    tri_end = tri_start + Ntriangles
+    tri_lines = raw_lines[tri_start:tri_end]
+
+    if len(tri_lines) != Ntriangles:
+        raise ValueError(
+            f"Expected {Ntriangles} triangle lines, found {len(tri_lines)}."
+        )
+
+    triangles = np.empty((Ntriangles, 3), dtype=int)
+    for i, line in enumerate(tri_lines):
+        vals = [int(float(x)) for x in line.split()[:3]]
+        if len(vals) != 3:
+            raise ValueError(f"Triangle line {i + 1} does not contain 3 indices.")
+        triangles[i, :] = vals
+
+    return {
+        'XY': XY,
+        'V': V,
+        'ELEV': ELEV,
+        'XYinterp': xy_interp,
+        'Zinterp': z_interp,
+        'triangles': triangles,
+    }
+
+
+import pandas as pd
+
+
+def read_wells(filename):
+    """
+    Read an ASCII wells file.
+
+    Expected format
+    ----------------
+    Line 1 : Nwells               (number of wells to follow; not strictly
+                                    needed since the rest of the file is
+                                    read directly, but validated if present)
+    Remaining lines : X  Y  Top  Bottom  Q      (one well per line)
+
+    Parameters
+    ----------
+    filename : str
+        Path to the wells file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: X, Y, Top, Bottom, Q
+    """
+    with open(filename, 'r') as f:
+        lines = [ln.strip() for ln in f if ln.strip() != '']
+
+    if len(lines) < 1:
+        raise ValueError("File is empty.")
+
+    Nwells = int(float(lines[0]))
+    well_lines = lines[1:]
+
+    if len(well_lines) != Nwells:
+        raise ValueError(
+            f"Header declares {Nwells} wells but found {len(well_lines)} "
+            f"data lines."
+        )
+
+    rows = []
+    for i, line in enumerate(well_lines):
+        vals = [float(x) for x in line.split()]
+        if len(vals) != 5:
+            raise ValueError(
+                f"Well line {i + 1} expected 5 columns (X, Y, Top, Bottom, "
+                f"Q), found {len(vals)}."
+            )
+        rows.append(vals)
+
+    df = pd.DataFrame(rows, columns=['X', 'Y', 'Top', 'Bottom', 'Q'])
+    return df
+
