@@ -449,3 +449,56 @@ def read_wells(filename):
     df = pd.DataFrame(rows, columns=['X', 'Y', 'Top', 'Bottom', 'Q'])
     return df
 
+def read_bc(filename):
+    """
+    Read boundary conditions from a NPSAT boundary file.
+
+    Returns
+    -------
+    list of dict
+        Each dictionary contains:
+        {
+            "type": str,
+            "nv": int,
+            "val": float or str,
+            "vertices": np.ndarray of shape (nv, 2)
+        }
+    """
+
+    boundaries = []
+
+    with open(filename, "r") as f:
+        # Number of boundary conditions
+        N = int(f.readline().strip())
+
+        for _ in range(N):
+
+            # Boundary header: TYPE nv val
+            line = f.readline().strip().split()
+
+            bc_type = line[0]
+            nv = int(line[1])
+
+            # val may be either numeric or a string
+            try:
+                val = float(line[2])
+            except ValueError:
+                val = line[2]
+
+            # Vertices
+            vertices = np.empty((nv, 2), dtype=float)
+
+            for i in range(nv):
+                vertices[i, :] = [
+                    float(v) for v in f.readline().split()
+                ]
+
+            boundaries.append({
+                "type": bc_type,
+                "nv": nv,
+                "val": val,
+                "vertices": vertices
+            })
+
+    return boundaries
+
