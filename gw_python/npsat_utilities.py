@@ -502,3 +502,45 @@ def read_bc(filename):
 
     return boundaries
 
+
+def read_multi_rect(filename):
+    """
+    Read a MULTIRECT boundary/area file with the format:
+
+        MULTIRECT
+        N
+        interp_type interp_file
+        xmin ymin xmax ymax
+        interp_type interp_file
+        xmin ymin xmax ymax
+        ...  (repeated N times)
+
+    Returns
+    -------
+    list of dict, each with keys:
+        'type' : str            - interpolation type (e.g. "GRIDDED")
+        'file' : str            - interpolation data filename
+        'bbox' : np.ndarray     - 2x2 array [[xmin, ymin], [xmax, ymax]]
+    """
+    with open(filename, 'r') as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    idx = 0
+    keyword = lines[idx]; idx += 1
+    if keyword != 'MULTIRECT':
+        raise ValueError(f"Expected 'MULTIRECT' keyword, got '{keyword}'")
+
+    n = int(lines[idx]); idx += 1
+
+    area_list = []
+    for _ in range(n):
+        interp_type, interp_file = lines[idx].split(); idx += 1
+        xmin, ymin, xmax, ymax = map(float, lines[idx].split()); idx += 1
+
+        area_list.append({
+            'type': interp_type,
+            'file': interp_file,
+            'bbox': np.array([[xmin, ymin], [xmax, ymax]])
+        })
+
+    return area_list
