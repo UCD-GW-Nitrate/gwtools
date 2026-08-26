@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 from shapely.geometry import Polygon, LineString
+import plotly.graph_objects as go
 
 def read_urf_calc(prefix_filename, nproc, n_strml, por, show_progress=False):
     col_names = ['SrcID', 'SrcInd', 'Eid', 'Sid', 'ER',
@@ -544,3 +545,81 @@ def read_multi_rect(filename):
         })
 
     return area_list
+
+
+def plot_triangulation(xy, v, triangles, as_surface=False, show_edges=False,
+                        colorscale='Viridis', title='Triangulated field'):
+    """
+    Plot a triangulated 2D field using plotly graph_objects.
+
+    Parameters
+    ----------
+    xy : (n_nodes, 2) array
+        Node coordinates.
+    v : (n_nodes,) array
+        Scalar values at nodes (one column of V).
+    triangles : (n_tria, 3) array
+        Node indices (0-based) forming each triangle.
+    as_surface : bool
+        If True, plot as a 3D surface with z = v (elevation).
+        If False, plot as a flat 2D triangulated color map (z = 0, top-down view).
+    show_edges : bool
+        If True, overlay triangle edges as black lines.
+    colorscale : str
+        Plotly colorscale name.
+    title : str
+        Plot title.
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+    """
+    x, y = xy[:, 0], xy[:, 1]
+    z = v if as_surface else np.zeros_like(v)
+    i, j, k = triangles[:, 0], triangles[:, 1], triangles[:, 2]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Mesh3d(
+        x=x, y=y, z=z,
+        i=i, j=j, k=k,
+        intensity=v,
+        colorscale=colorscale,
+        colorbar=dict(title='V'),
+        flatshading=True,
+        name='field'
+    ))
+
+    if show_edges:
+        # build edge coordinates (with None separators) for triangle wireframe
+        edge_x, edge_y, edge_z = [], [], []
+        for tri in triangles:
+            for a, b in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])]:
+                edge_x += [x[a], x[b], None]
+                edge_y += [y[a], y[b], None]
+                edge_z += [z[a], z[b], None]
+
+        fig.add_trace(go.Scatter3d(
+            x=edge_x, y=edge_y, z=edge_z,
+            mode='lines',
+            line=dict(color='black', width=1),
+            name='mesh edges',
+            hoverinfo='skip'
+        ))
+
+    if as_surface:
+        scene = dict(
+            xaxis_title='x', yaxis_title='y', zaxis_title='V',
+            aspectmode='data'
+        )
+    else:
+        # flat top-down view: force camera straight down, no z extent visible
+        scene = dict(
+            xaxis_title='x', yaxis_title='y', zaxis=dict(visible=False),
+            aspectmode='data',
+            camera=dict(eye=dict(x=0, y=0, z=2.5), up=dict(x=0, y=1, z=0))
+        )
+
+    fig.update_layout(title=title, scene=scene)
+
+    return fig
