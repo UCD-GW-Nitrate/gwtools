@@ -957,3 +957,52 @@ def calc_relative_layer_positions(elev, top_elev, direction="top2bot"):
         vert_rel[i, :] = rel
 
     return vert_rel
+
+def quad_gdf_to_mesh(mesh_shp):
+    """
+    Convert a GeoDataFrame of quadrilateral polygons to NPSAT-style
+    vertex and element arrays.
+
+    Parameters
+    ----------
+    mesh_shp : geopandas.GeoDataFrame
+        GeoDataFrame containing 2D quadrilateral Polygon geometries.
+
+    Returns
+    -------
+    xy : ndarray, shape (n_vert, 2)
+        Unique vertex coordinates [x, y].
+
+    ids : ndarray, shape (n_elem, 4)
+        Vertex indices for each quadrilateral. Each value indexes a
+        row of `xy`.
+    """
+
+    vertex_map = {}
+    vertices = []
+    elements = []
+
+    for geom in mesh_shp.geometry:
+
+        # Polygon exterior repeats the first point at the end,
+        # so discard the last coordinate.
+        coords = list(geom.exterior.coords)[:-1]
+
+        elem_ids = []
+
+        for coord in coords:
+            # Explicitly ignore Z if present
+            xy_coord = (coord[0], coord[1])
+
+            if xy_coord not in vertex_map:
+                vertex_map[xy_coord] = len(vertices)
+                vertices.append(xy_coord)
+
+            elem_ids.append(vertex_map[xy_coord])
+
+        elements.append(elem_ids)
+
+    xy = np.asarray(vertices, dtype=float)
+    ids = np.asarray(elements, dtype=int)
+
+    return xy, ids
