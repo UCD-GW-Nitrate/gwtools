@@ -5,6 +5,9 @@ from shapely.geometry import box
 import matplotlib.tri as mtri
 import numpy as np
 
+from matplotlib import colors
+from matplotlib.colors import BoundaryNorm
+
 def plot_shape_and_nodes(gdf, i, ax=None):
     """
     Plot the geometry of gdf at index i together with its vertices.
@@ -120,3 +123,17 @@ def plot_triangulation(ax, xy_nodes, tri_ids,
             )
 
         ax.set_aspect("equal")
+
+
+def ee_rch_color_scheme():
+    # Define the same colormap as in the earth engine
+    # Define custom bins and colors
+    bounds = [-1000, -500, -100, -0.0001, 0, 0.0001, 50, 100, 150, 200, 300, 400, 600, 800, 1000, 1500, 2000, 4000,
+              60000]  # value ranges
+    colors_list = ["#252525", "#636363", "#969696", "#cccccc", "#ffffff",
+                   "#9ecae1", "#6baed6", "#3182bd", "#08519c",
+                   "#c7e9c0", "#a1d99b", "#74c476", "#31a354", "#006d2c",
+                   "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"]  # same length - 1
+    cmap = colors.ListedColormap(colors_list)
+    norm = BoundaryNorm(boundaries=bounds, ncolors=cmap.N)
+    return cmap, norm
