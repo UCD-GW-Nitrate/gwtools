@@ -1,3 +1,5 @@
+import os
+import warnings
 from pathlib import Path
 import numpy as np
 
@@ -1006,3 +1008,216 @@ def quad_gdf_to_mesh(mesh_shp):
     ids = np.asarray(elements, dtype=int)
 
     return xy, ids
+
+
+def read_partitioned_gridded_interpolant(filename, read_values=False, read_grid=False):
+    """
+    Read a partitioned gridded interpolant master file.
+
+    Returns
+    -------
+    partitions : list of dict
+        One dictionary per partition with keys:
+            'Type'
+            'grid_file'
+            'value_file'
+            'values'
+            'grid'
+            'coords'
+    """
+
+    base_dir = os.path.dirname(os.path.abspath(filename))
+
+    partitions = []
+
+    with open(filename, 'r') as f:
+
+        # Number of partitions
+        npartitions = int(f.readline().strip())
+
+        for _ in range(npartitions):
+
+            # Partition header
+            parts = f.readline().strip().split()
+
+            ncoords = int(parts[0])
+            interp_type = parts[1]
+            grid_file = parts[2]
+            value_file = parts[3]
+
+            # Coordinates
+            coords = np.empty((ncoords, 2), dtype=float)
+
+            for i in range(ncoords):
+                coords[i, :] = list(map(float, f.readline().split()))
+
+            # Read values if requested
+            values = None
+            if read_values:
+                values = np.loadtxt(
+                    os.path.join(base_dir, value_file)
+                )
+
+            # Read grid
+            grid = None
+            if read_grid:
+                grid_filename = os.path.join(base_dir, grid_file)
+
+                grid = read_gridded_interpolant_grid(grid_filename)
+
+
+            partition = {
+                'Type': interp_type,
+                'grid_file': grid_file,
+                'value_file': value_file,
+                'values': values,
+                'grid': grid,
+                'coords': coords
+            }
+
+            partitions.append(partition)
+
+    return partitions
+
+
+def write_partitioned_master_file(partitions, filename, write_values=False):
+    """
+    Write a partitioned gridded interpolant master file.
+
+    Parameters
+    ----------
+    partitions : list of dict
+        List of partition dictionaries with keys:
+            'Type'
+            'grid_file'
+            'value_file'
+            'values'
+            'grid'
+            'coords'
+
+    filename : str
+        Output master filename.
+
+    write_values : bool, optional
+        If True, write each partition['values'] using np.savetxt()
+        to partition['value_file'].
+
+    Format
+    ------
+    npartitions
+    ncoords Type grid_file value_file
+    X Y
+    X Y
+    ...
+    """
+
+    base_dir = os.path.dirname(os.path.abspath(filename))
+
+    with open(filename, 'w') as f:
+
+        # Number of partitions
+        f.write(f"{len(partitions)}\n")
+
+        for part in partitions:
+
+            coords = np.asarray(part['coords'])
+            ncoords = coords.shape[0]
+
+            # Partition header
+            f.write(
+                f"{ncoords} "
+                f"{part['Type']} "
+                f"{part['grid_file']} "
+                f"{part['value_file']}\n"
+            )
+
+            # Coordinates
+            for x, y in coords:
+                f.write(f"{x:.6f} {y:.6f}\n")
+
+            # Write value file if requested
+            if write_values:
+                value_filename = os.path.join(
+                    base_dir,
+                    part['value_file']
+                )
+
+                np.savetxt(
+                    value_filename,
+                    np.asarray(part['values'])
+                )
+
+def read_gridded_interpolant_grid(filename):
+    """
+    Read a gridded interpolant grid file.
+
+    Format
+    ------
+    x nx
+    y ny
+    dx dy
+    nlay
+    <ny x nx array of row IDs>
+
+    Negative grid IDs are allowed and can represent no-data cells.
+
+    Returns
+    -------
+    grid : dict
+        Dictionary with keys:
+            'll_point' : [x, y]
+            'nrow'     : ny
+            'ncol'     : nx
+            'nlay'     : nlay
+            'cellsize' : [dx, dy]
+            'grid_ids' : (ny, nx) integer numpy array
+            'Elev'     : None
+    """
+
+    with open(filename, 'r') as f:
+
+        # x-coordinate and number of columns
+        line = f.readline().split()
+        x = float(line[0])
+        nx = int(line[1])
+
+        # y-coordinate and number of rows
+        line = f.readline().split()
+        y = float(line[0])
+        ny = int(line[1])
+
+        # Cell dimensions
+        line = f.readline().split()
+        dx = float(line[0])
+        dy = float(line[1])
+
+        # Number of layers
+        nlay = int(f.readline().strip())
+
+        if nlay != 1:
+            raise NotImplementedError(
+                f"Only nlay == 1 is currently supported. "
+                f"Grid has nlay = {nlay}."
+            )
+
+        # Grid IDs
+        grid_ids = np.loadtxt(f, dtype=int, ndmin=2)
+
+    # Make sure the array has the expected shape
+    if grid_ids.shape != (ny, nx):
+        raise ValueError(
+            f"Grid size mismatch in '{filename}': "
+            f"expected ({ny}, {nx}), got {grid_ids.shape}"
+        )
+
+    grid = {
+        'll_point': [x, y],
+        'nrow': ny,
+        'ncol': nx,
+        'nlay': nlay,
+        'cellsize': [dx, dy],
+        'grid_ids': grid_ids,
+        'Elev': None
+    }
+
+    return grid
