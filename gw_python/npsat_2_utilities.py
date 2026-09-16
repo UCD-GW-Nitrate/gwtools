@@ -2,6 +2,7 @@ import os
 import warnings
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 def write_scatter_interpolant(prefix, node_xy, tri_ids, data,HOR_type,VER_type, return_filenames=False,):
     """
@@ -1221,3 +1222,40 @@ def read_gridded_interpolant_grid(filename):
     }
 
     return grid
+
+def read_npsat_urfs(prefix, nproc):
+    """
+    Read and merge NPSAT URF output files from multiple MPI ranks.
+
+    Files are expected to be named:
+        {prefix}_rank_0.dat
+        {prefix}_rank_1.dat
+        ...
+        {prefix}_rank_{nproc-1}.dat
+
+    Parameters
+    ----------
+    prefix : str
+        File prefix, including path if necessary.
+    nproc : int
+        Number of MPI ranks.
+
+    Returns
+    -------
+    pd.DataFrame
+        Combined DataFrame containing data from all ranks.
+        Leading/trailing whitespace is removed from column names.
+    """
+    dfs = []
+
+    for rank in range(nproc):
+        filename = f"{prefix}_rank_{rank}.dat"
+
+        df = pd.read_csv(filename)
+
+        # Remove leading/trailing whitespace from column names
+        df.columns = df.columns.str.strip()
+
+        dfs.append(df)
+
+    return pd.concat(dfs, ignore_index=True)

@@ -137,3 +137,35 @@ def ee_rch_color_scheme():
     cmap = colors.ListedColormap(colors_list)
     norm = BoundaryNorm(boundaries=bounds, ncolors=cmap.N)
     return cmap, norm
+
+def ee_no3_color_scheme():
+    """
+    NO3 loading color scheme.
+
+    Units: kg N/ha/year
+    """
+
+    bounds = [0, 1e-10,   # 0
+        15, 30, 50, 100, 150, 200, 300, 500, 100000]
+
+    colors_list = [
+        "#087b13",  # 0
+        "#27a63a",  # 1 - 15
+        "#35b76b",  # 15 - 30
+        "#2fd33b",  # 30 - 50
+        "#86ef18",  # 50 - 100
+        "#fff500",  # 100 - 150
+        "#ff9d00",  # 150 - 200
+        "#ff4b20",  # 200 - 300
+        "#ff1010",  # 300 - 500
+        "#a90808"   # > 500
+    ]
+
+    cmap = colors.ListedColormap(colors_list)
+
+    norm = BoundaryNorm(
+        boundaries=bounds,
+        ncolors=cmap.N
+    )
+
+    return cmap, norm

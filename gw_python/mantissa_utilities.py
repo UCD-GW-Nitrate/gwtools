@@ -72,3 +72,14 @@ def read_swat_output_file(filename, watershed_order = None, field_names = None):
     swat["hrus"] = swat.pop("hru_num").astype(int)
 
     return swatTAB, swat
+
+
+def select_eid(df, arr1, arr2, arr3, eid):
+    mask = df['Eid'].to_numpy() == eid
+
+    df_out = df.loc[mask].copy()
+    arr1_out = arr1[mask, :]
+    arr2_out = arr2[mask, :]
+    arr3_out = arr3[mask, :]
+
+    return df_out, arr1_out, arr2_out, arr3_out

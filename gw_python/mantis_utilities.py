@@ -684,3 +684,73 @@ def simulate_feedback_concentrations(
             lf[iyr] = perc_conc
 
     return applied_conc_all, perc_conc_all
+
+
+def expand_urfs(urf_df, m_field, s_field, n_years=100):
+    """
+    Expand URF parameters into annual lognormal response functions.
+
+    Parameters
+    ----------
+    urf_df : pandas.DataFrame
+        DataFrame containing the URF mean and standard deviation fields.
+    m_field : str
+        Column name containing the mean.
+    s_field : str
+        Column name containing the standard deviation.
+    n_years : int, default=100
+        Number of years over which to expand the URFs.
+
+    Returns
+    -------
+    urfs : np.ndarray
+        Array of shape (len(urf_df), n_years).
+    """
+
+    n = len(urf_df)
+    urfs = np.zeros((n, n_years), dtype=float)
+
+    x = np.arange(1, n_years + 1, dtype=float)
+
+    # Special URF for m = -1
+    urf_m1 = np.array([
+        0.48443252, 0.41642340, 0.08307405, 0.01338364,
+        0.00219913, 0.00039049, 0.00007584, 0.00001608,
+        0.00000370, 0.00000092, 0.00000023
+    ])
+
+    # Special URF for m = -2
+    urf_m2 = np.array([
+        0.00095171, 0.19513243, 0.41957050, 0.25244126,
+        0.09333424, 0.02803643, 0.00771540, 0.00206063,
+        0.00055016, 0.00014916, 0.00004141, 0.00001182,
+        0.00000347, 0.00000106, 0.00000032
+    ])
+
+    for i, (m, s) in enumerate(
+        zip(urf_df[m_field].to_numpy(),
+            urf_df[s_field].to_numpy())
+    ):
+
+        # Special predefined URFs
+        if m == -1:
+            ncopy = min(len(urf_m1), n_years)
+            urfs[i, :ncopy] = urf_m1[:ncopy]
+
+        elif m == -2:
+            ncopy = min(len(urf_m2), n_years)
+            urfs[i, :ncopy] = urf_m2[:ncopy]
+
+        # Any other negative mean -> all zeros
+        elif m < 0:
+            continue
+
+        # Lognormal URF
+        else:
+            urfs[i, :] = lognorm.pdf(
+                x,
+                s=s,
+                scale=np.exp(m)
+            )
+
+    return urfs
