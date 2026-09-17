@@ -3,6 +3,7 @@ import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from scipy.interpolate import RegularGridInterpolator
 
 def write_scatter_interpolant(prefix, node_xy, tri_ids, data,HOR_type,VER_type, return_filenames=False,):
     """
@@ -1259,3 +1260,324 @@ def read_npsat_urfs(prefix, nproc):
         dfs.append(df)
 
     return pd.concat(dfs, ignore_index=True)
+
+
+def create_partitioned_gridded_interpolant(partitions):
+    """
+    Create a callable interpolator for partitioned gridded data.
+
+    Parameters
+    ----------
+    partitions : list of dict
+        Output from:
+
+        read_partitioned_gridded_interpolant(
+            ...,
+            read_values=True,
+            read_grid=True
+        )
+
+        Each partition must contain:
+            'coords'
+            'values'
+            'grid'
+
+        If coords has:
+            2 rows  -> interpreted as a bounding box
+            >2 rows -> interpreted as polygon vertices
+
+    Returns
+    -------
+    interp : callable
+        Usage:
+
+            value = interp(x, y)
+
+        x and y may be scalars or arrays.
+
+        If values have shape:
+            (nvalues,)     -> output follows shape of x/y
+            (nvalues, nt)  -> output shape is x/y shape + (nt,)
+
+        Points outside all partitions return NaN.
+    """
+
+    local_interpolants = []
+
+    # =========================================================
+    # Build local interpolants
+    # =========================================================
+    for ipart, part in enumerate(partitions):
+
+        if part['grid'] is None:
+            raise ValueError(
+                f"Partition {ipart}: grid has not been loaded."
+            )
+
+        if part['values'] is None:
+            raise ValueError(
+                f"Partition {ipart}: values have not been loaded."
+            )
+
+        grid = part['grid']
+
+        grid_ids = np.asarray(grid['grid_ids'])
+        values = np.asarray(part['values'], dtype=float)
+        coords = np.asarray(part['coords'], dtype=float)
+
+        ny = grid['nrow']
+        nx = grid['ncol']
+
+        x0, y0 = grid['ll_point']
+        dx, dy = grid['cellsize']
+
+        # -----------------------------------------------------
+        # Check grid dimensions
+        # -----------------------------------------------------
+        if grid_ids.shape != (ny, nx):
+            raise ValueError(
+                f"Partition {ipart}: grid_ids has shape "
+                f"{grid_ids.shape}, expected ({ny}, {nx})."
+            )
+
+        # -----------------------------------------------------
+        # Grid CELL CENTER coordinates
+        #
+        # ll_point is lower-left CORNER of the grid.
+        # -----------------------------------------------------
+        xgrid = x0 + (np.arange(nx) + 0.5) * dx
+        ygrid = y0 + (np.arange(ny) + 0.5) * dy
+
+        # -----------------------------------------------------
+        # Make values consistently (nvalues, nt)
+        # -----------------------------------------------------
+        scalar_values = (values.ndim == 1)
+
+        if scalar_values:
+            values = values[:, None]
+
+        if values.ndim != 2:
+            raise ValueError(
+                f"Partition {ipart}: values must be a 1-D or "
+                f"2-D array. Got shape {values.shape}."
+            )
+
+        nt = values.shape[1]
+
+        # -----------------------------------------------------
+        # Convert grid IDs to actual gridded values
+        #
+        # grid_ids[i,j] gives row in values.
+        # Negative IDs are no-data.
+        # -----------------------------------------------------
+        local_values = np.full(
+            (ny, nx, nt),
+            np.nan,
+            dtype=float
+        )
+
+        valid = grid_ids >= 0
+
+        if np.any(valid):
+
+            max_id = grid_ids[valid].max()
+
+            if max_id >= values.shape[0]:
+                raise IndexError(
+                    f"Partition {ipart}: maximum grid ID is "
+                    f"{max_id}, but values contains only "
+                    f"{values.shape[0]} rows."
+                )
+
+            local_values[valid, :] = values[grid_ids[valid], :]
+
+        # -----------------------------------------------------
+        # Local regular-grid interpolator
+        #
+        # fill_value=None allows extrapolation beyond the
+        # outer cell centers. This is OK because partition
+        # membership is checked BEFORE calling the interpolator.
+        # -----------------------------------------------------
+        local_interp = RegularGridInterpolator(
+            (ygrid, xgrid),
+            local_values,
+            method='linear',
+            bounds_error=False,
+            fill_value=None
+        )
+
+        # =====================================================
+        # Partition geometry
+        # =====================================================
+
+        ncoords = coords.shape[0]
+
+        if ncoords < 2:
+            raise ValueError(
+                f"Partition {ipart}: at least 2 coordinates "
+                f"are required."
+            )
+
+        # Always calculate bbox.
+        # For polygons this is used as a fast preliminary test.
+        xmin = coords[:, 0].min()
+        xmax = coords[:, 0].max()
+        ymin = coords[:, 1].min()
+        ymax = coords[:, 1].max()
+
+        if ncoords == 2:
+
+            # Two coordinates define bbox
+            geometry_type = 'bbox'
+            polygon = None
+
+        else:
+
+            # More than two coordinates define polygon
+            geometry_type = 'polygon'
+
+            # Path automatically closes the polygon
+            polygon = Path(coords, closed=True)
+
+        local_interpolants.append({
+            'interp': local_interp,
+            'geometry_type': geometry_type,
+            'bbox': (xmin, xmax, ymin, ymax),
+            'polygon': polygon,
+            'scalar_values': scalar_values,
+            'nt': nt
+        })
+
+    # =========================================================
+    # Check output dimensions are consistent
+    # =========================================================
+    if len(local_interpolants) == 0:
+        raise ValueError("No partitions were provided.")
+
+    nt = local_interpolants[0]['nt']
+    scalar_output = local_interpolants[0]['scalar_values']
+
+    for ipart, local in enumerate(local_interpolants):
+
+        if local['nt'] != nt:
+            raise ValueError(
+                f"Partition {ipart}: number of values per grid "
+                f"cell ({local['nt']}) differs from the first "
+                f"partition ({nt})."
+            )
+
+        if local['scalar_values'] != scalar_output:
+            raise ValueError(
+                "All partitions must use the same value dimensions."
+            )
+
+    # =========================================================
+    # Global interpolation function
+    # =========================================================
+    def interp(x, y):
+
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+
+        # Broadcast x/y if necessary
+        x, y = np.broadcast_arrays(x, y)
+
+        input_shape = x.shape
+
+        xf = x.ravel()
+        yf = y.ravel()
+
+        npoints = xf.size
+
+        result = np.full(
+            (npoints, nt),
+            np.nan,
+            dtype=float
+        )
+
+        # Track points already assigned to a partition
+        assigned = np.zeros(npoints, dtype=bool)
+
+        # =====================================================
+        # Search partitions
+        # =====================================================
+        for local in local_interpolants:
+
+            xmin, xmax, ymin, ymax = local['bbox']
+
+            # -------------------------------------------------
+            # Fast bbox test first
+            # -------------------------------------------------
+            bbox_mask = (
+                (~assigned) &
+                (xf >= xmin) &
+                (xf <= xmax) &
+                (yf >= ymin) &
+                (yf <= ymax)
+            )
+
+            if not np.any(bbox_mask):
+                continue
+
+            # -------------------------------------------------
+            # BBOX partition
+            # -------------------------------------------------
+            if local['geometry_type'] == 'bbox':
+
+                mask = bbox_mask
+
+            # -------------------------------------------------
+            # POLYGON partition
+            # -------------------------------------------------
+            else:
+
+                candidate_idx = np.where(bbox_mask)[0]
+
+                candidate_points = np.column_stack([
+                    xf[candidate_idx],
+                    yf[candidate_idx]
+                ])
+
+                inside = local['polygon'].contains_points(
+                    candidate_points,
+                    radius=1e-10
+                )
+
+                mask = np.zeros(npoints, dtype=bool)
+                mask[candidate_idx[inside]] = True
+
+            if not np.any(mask):
+                continue
+
+            # -------------------------------------------------
+            # Interpolate ONLY points belonging to partition
+            #
+            # RegularGridInterpolator expects (y, x)
+            # because local_values is indexed [row, col].
+            # -------------------------------------------------
+            pts = np.column_stack([
+                yf[mask],
+                xf[mask]
+            ])
+
+            result[mask, :] = local['interp'](pts)
+
+            assigned[mask] = True
+
+        # =====================================================
+        # Restore original input dimensions
+        # =====================================================
+        result = result.reshape(input_shape + (nt,))
+
+        # Scalar value file:
+        # (..., 1) -> (...)
+        if scalar_output:
+            result = result[..., 0]
+
+        # Python scalar for scalar x,y + scalar field
+        if result.ndim == 0:
+            return result.item()
+
+        return result
+
+    return interp
