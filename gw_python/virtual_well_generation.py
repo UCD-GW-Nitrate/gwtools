@@ -445,12 +445,21 @@ def impute_D_SL_Q(
     D_fld="TOTALCOMPLETEDDEPTH",
     SL_fld="ScreenLength",
     Q_fld="WELLYIELD",
+    condition_Q=True,
 ):
     """
     Impute missing D, SL, and Q using three pairwise KDE models.
 
     Observed positive values are kept fixed.
     Missing or invalid values are sampled.
+
+    Adaptive imputation of D, SL and Q.
+    Procedure:
+        1. Preserve valid observed values.
+        2. Try all active KDE constraints.
+        3. If unsuccessful, remove the most frequently failed constraint.
+        4. Repeat with remaining constraints.
+        5. Fall back to empirical sampling if necessary.
 
     Parameters
     ----------
@@ -471,16 +480,37 @@ def impute_D_SL_Q(
     sample_method : {"ecdf", "loguniform"}
         How to sample non-Q missing variables.
 
+    condition_Q=True:
+        Use three pairwise KDEs:
+            D-Q, D-SL, SL-Q
+
+    condition_Q=False:
+        Use only D-SL KDE for rejection.
+        Q is sampled independently if missing.
+
     Returns
     -------
-    D_imp, SL_imp, Q_imp, accepted, n_iter
+    D_imp, SL_imp, Q_imp, status, n_iter
+
+    Status:
+        OBSERVED
+        ACCEPTED
+        RELAX_D_Q
+        RELAX_D_SL
+        RELAX_SL_Q
+        INDEPENDENT
+        FAILED
     """
 
     if rng is None:
         rng = np.random.default_rng()
 
-    models = [model_D_Q, model_D_SL, model_SL_Q]
+    if sample_method not in ("ecdf", "loguniform"):
+        raise ValueError("Invalid sample_method")
 
+        # -------------------------------------------------------
+        # 1. Observed values
+        # -------------------------------------------------------
     D_fixed = _is_valid_positive(D)
     SL_fixed = _is_valid_positive(SL)
     Q_fixed = _is_valid_positive(Q)
@@ -489,44 +519,225 @@ def impute_D_SL_Q(
     SL0 = float(SL) if SL_fixed else np.nan
     Q0 = float(Q) if Q_fixed else np.nan
 
+    # Observed values are assumed prevalidated.
     if D_fixed and SL_fixed and Q_fixed:
-        return D0, SL0, Q0, True, 0
+        return D0, SL0, Q0, "OBSERVED", 0
 
-    sampler = sample_field_from_ecdf if sample_method == "ecdf" else sample_field_loguniform
+    # -------------------------------------------------------
+    # 2. Models and active constraints
+    # -------------------------------------------------------
+    all_models = {
+        "D_Q": model_D_Q,
+        "D_SL": model_D_SL,
+        "SL_Q": model_SL_Q,
+    }
 
-    for it in range(1, max_iter + 1):
+    active = (
+        ["D_Q", "D_SL", "SL_Q"]
+        if condition_Q else ["D_SL"]
+    )
 
-        D_cand = D0 if D_fixed else sampler(D_fld, models, rng)
-        SL_cand = SL0 if SL_fixed else sampler(SL_fld, models, rng)
+    # Candidate distributions for D and SL
+    geometry_models = (
+        [model_D_Q, model_D_SL, model_SL_Q]
+        if condition_Q else [model_D_SL]
+    )
 
-        Q_cand = (
-            Q0
-            if Q_fixed
-            else sample_Q_conditioned(
-                Q_fld,
-                models,
-                conditioning_prob=swat_irrg_prob,
-                rng=rng,
-                method=sample_method,
+    # -------------------------------------------------------
+    # 3. Cached empirical distributions
+    # -------------------------------------------------------
+    def prepare_samples(field, models):
+        if sample_method == "ecdf":
+            return _get_cached_ecdf(field, models)
+
+        lo, hi = get_field_range(field, models)
+        return (lo, hi)
+
+    D_samples = (
+        None if D_fixed
+        else prepare_samples(D_fld, geometry_models)
+    )
+
+    SL_samples = (
+        None if SL_fixed
+        else prepare_samples(SL_fld, geometry_models)
+    )
+
+    # Q always uses observed Q data when missing.
+    # No Q-related KDE is evaluated when condition_Q=False.
+    Q_samples = None
+
+    if not Q_fixed:
+        if condition_Q:
+            Q_models = [model_D_Q, model_SL_Q]
+            Q_samples = prepare_samples(Q_fld, Q_models)
+        else:
+            Q_samples = _get_cached_samples(
+                model_D_Q, Q_fld
             )
+
+    # -------------------------------------------------------
+    # 4. Optional SWAT conditioning
+    # -------------------------------------------------------
+    if not Q_fixed and swat_irrg_prob is not None:
+
+        qvals = _get_cached_samples(model_D_Q, Q_fld)
+
+        p = float(np.clip(swat_irrg_prob, 0.0, 1.0))
+        qlo, qhi = np.quantile(qvals, [0.05, 0.95])
+
+        q_target = qlo + p * (qhi - qlo)
+        spread = 0.15 * (qhi - qlo)
+
+        qmin = max(qvals.min(), q_target - spread)
+        qmax = min(qvals.max(), q_target + spread)
+
+        conditioned = qvals[
+            (qvals >= qmin) & (qvals <= qmax)
+            ]
+
+        if len(conditioned):
+            Q_samples = conditioned
+
+    # -------------------------------------------------------
+    # 5. Sampling helper
+    # -------------------------------------------------------
+    def draw(samples):
+        if sample_method == "ecdf" or isinstance(samples, np.ndarray):
+            return float(rng.choice(samples))
+
+        lo, hi = samples
+
+        return float(
+            10 ** rng.uniform(np.log10(lo), np.log10(hi))
         )
 
-        # Physical constraint: screen length cannot exceed completed depth
-        if SL_cand > D_cand:
+    def generate_candidate():
+        d = D0 if D_fixed else draw(D_samples)
+        sl = SL0 if SL_fixed else draw(SL_samples)
+        q = Q0 if Q_fixed else draw(Q_samples)
+
+        return d, sl, q
+
+        # -------------------------------------------------------
+        # 6. Adaptive rejection sampling
+        # -------------------------------------------------------
+
+    total_iter = 0
+    removed = []
+
+    while True:
+
+        # Accumulate rejection scores for each active KDE
+        rejection_scores = {
+            key: 0.0 for key in active
+        }
+
+        n_valid_candidates = 0
+
+        # Attempt with currently active constraints
+        for _ in range(max_iter):
+
+            total_iter += 1
+
+            d, sl, q = generate_candidate()
+
+            # Physical constraint is never relaxed
+            if sl > d:
+                continue
+
+            n_valid_candidates += 1
+
+            # Evaluate all active KDE constraints
+            probabilities = {}
+
+            for key in active:
+
+                if key == "D_Q":
+                    probabilities[key] = float(
+                        model_D_Q.accept_probability(d, q)[0]
+                    )
+
+                elif key == "D_SL":
+                    probabilities[key] = float(
+                        model_D_SL.accept_probability(d, sl)[0]
+                    )
+
+                elif key == "SL_Q":
+                    probabilities[key] = float(
+                        model_SL_Q.accept_probability(sl, q)[0]
+                    )
+
+            # Accumulate expected rejection probabilities
+            for key, p in probabilities.items():
+                rejection_scores[key] += 1.0 - p
+
+            # Independent acceptance tests
+            passed = all(
+                rng.random() < p
+                for p in probabilities.values()
+            )
+
+            if passed:
+
+                if not removed:
+                    status = "ACCEPTED"
+
+                elif len(removed) == 1:
+                    status = f"RELAX_{removed[0]}"
+
+                else:
+                    status = "INDEPENDENT"
+
+                return d, sl, q, status, total_iter
+
+        # ---------------------------------------------------
+        # 7. Remove the most restrictive KDE
+        # ---------------------------------------------------
+        if active:
+
+            if n_valid_candidates > 0:
+
+                mean_rejection = {
+                    key: score / n_valid_candidates
+                    for key, score in rejection_scores.items()
+                }
+
+                # Remove KDE with highest mean rejection
+                worst = max(
+                    mean_rejection,
+                    key=mean_rejection.get
+                )
+
+            else:
+                # No physically valid candidates generated.
+                # KDE relaxation cannot fix this problem.
+                break
+
+            active.remove(worst)
+            removed.append(worst)
+
             continue
 
-        p_D_Q = model_D_Q.accept_probability(D_cand, Q_cand)[0]
-        p_D_SL = model_D_SL.accept_probability(D_cand, SL_cand)[0]
-        p_SL_Q = model_SL_Q.accept_probability(SL_cand, Q_cand)[0]
+        # ---------------------------------------------------
+        # 8. All KDE constraints removed
+        # ---------------------------------------------------
+        # Continue sampling until physical geometry is valid.
+        for _ in range(max_iter):
 
-        if (
-            rng.random() < p_D_Q and
-            rng.random() < p_D_SL and
-            rng.random() < p_SL_Q
-        ):
-            return D_cand, SL_cand, Q_cand, True, it
+            total_iter += 1
 
-    return D0, SL0, Q0, False, max_iter
+            d, sl, q = generate_candidate()
+
+            if sl <= d:
+                return d, sl, q, "INDEPENDENT", total_iter
+
+        break
+
+    # -------------------------------------------------------
+    # 9. Failed to construct physically valid geometry
+    # -------------------------------------------------------
+    return D0, SL0, Q0, "FAILED", total_iter
 
 def positive_values(df, field):
     """Return finite positive numeric values from a dataframe field."""
@@ -943,3 +1154,85 @@ def plot_pdf_comparison(
     )
 
     return fig
+
+
+def _get_cached_samples(model, field):
+    """
+    Return cached positive empirical observations for a field.
+
+    Cache is stored on the PairKDE instance.
+    Rebuilt only when the model object is new.
+    """
+    if not hasattr(model, "_sample_cache"):
+        model._sample_cache = {}
+
+    if field not in model._sample_cache:
+        vals = _model_values_for_field(model, field)
+
+        if vals is None:
+            model._sample_cache[field] = np.empty(0, dtype=float)
+        else:
+            vals = np.asarray(vals, dtype=float)
+            vals = vals[np.isfinite(vals) & (vals > 0)]
+            model._sample_cache[field] = vals
+
+    return model._sample_cache[field]
+
+
+def _get_cached_ecdf(field, models):
+    """
+    Build the combined empirical candidate distribution once.
+
+    Preserves the original behavior:
+      - Uses all KDEs containing the field
+      - Intersects observed value ranges
+      - Retains duplicate observations
+      - Samples using the empirical distribution
+
+    The combined array is cached on the first model.
+    """
+    cache_owner = models[0]
+
+    if not hasattr(cache_owner, "_ecdf_cache"):
+        cache_owner._ecdf_cache = {}
+
+    key = (field, tuple(id(m) for m in models))
+
+    if key in cache_owner._ecdf_cache:
+        return cache_owner._ecdf_cache[key]
+
+    arrays = []
+
+    for model in models:
+        vals = _get_cached_samples(model, field)
+        if len(vals):
+            arrays.append(vals)
+
+    if not arrays:
+        raise ValueError(f"No valid empirical values for {field}")
+
+    # Original get_field_range() logic
+    lo = max(np.min(a) for a in arrays)
+    hi = min(np.max(a) for a in arrays)
+
+    if lo >= hi:
+        widths = [np.max(a) - np.min(a) for a in arrays]
+        idx = int(np.argmin(widths))
+        lo = float(np.min(arrays[idx]))
+        hi = float(np.max(arrays[idx]))
+
+    candidates = [
+        a[(a >= lo) & (a <= hi)]
+        for a in arrays
+    ]
+
+    candidates = [a for a in candidates if len(a)]
+
+    if not candidates:
+        raise ValueError(f"No candidates available for {field}")
+
+    samples = np.concatenate(candidates)
+
+    cache_owner._ecdf_cache[key] = samples
+
+    return samples
