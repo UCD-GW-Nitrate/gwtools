@@ -359,3 +359,238 @@ def watersheds_to_gdfs(watersheds, nodes_df, crs):
 
     return line_gdf, point_gdf
 
+
+def get_mesh_boundary(node, elem, crs="EPSG:26910"):
+    """
+    Extract ordered boundary nodes and edges from an IWFM quadrilateral mesh.
+
+    Parameters
+    ----------
+    node : pd.DataFrame
+        Columns: ID, X, Y
+
+    elem : pd.DataFrame
+        Columns: IE, ND1, ND2, ND3, ND4
+
+    crs : str or CRS
+        Coordinate reference system.
+
+    Returns
+    -------
+    boundary_nodes : GeoDataFrame
+        ID       : original global node ID
+        local_id : sequential zero-based boundary node index
+        distance : cumulative distance along boundary
+        geometry : Point
+
+    boundary_lines : GeoDataFrame
+        ID       : original global element ID
+        nd_id0   : global ID of first node
+        nd_id1   : global ID of second node
+        nd_loc0  : local index of first node
+        nd_loc1  : local index of second node
+        length   : edge length
+        distance : cumulative distance at edge start
+        geometry : LineString
+
+    Notes
+    -----
+    - Boundary nodes and lines are ordered along the perimeter.
+    - The starting node is arbitrary.
+    - The final line connects back to the first node.
+    - Multiple disconnected boundary loops are not supported.
+    """
+
+    # -------------------------------------------------------
+    # 1. Extract edges from triangular and quadrilateral elements
+    # -------------------------------------------------------
+    elem_nodes = elem[
+        ["ND1", "ND2", "ND3", "ND4"]
+    ].to_numpy(dtype=int)
+
+    elem_ids = elem["IE"].to_numpy(dtype=int)
+
+    # Separate triangles and quadrilaterals
+    is_triangle = elem_nodes[:, 3] == 0
+    is_quad = ~is_triangle
+
+    # Quadrilateral edges
+    quad_pairs = np.array([
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
+    ])
+
+    quad_edges = elem_nodes[is_quad][:, quad_pairs].reshape(-1, 2)
+    quad_elem_ids = np.repeat(elem_ids[is_quad], 4)
+
+    # Triangular edges
+    tri_pairs = np.array([
+        [0, 1],
+        [1, 2],
+        [2, 0],
+    ])
+
+    tri_edges = elem_nodes[is_triangle][:, tri_pairs].reshape(-1, 2)
+    tri_elem_ids = np.repeat(elem_ids[is_triangle], 3)
+
+    # Combine
+    edges = np.vstack([quad_edges, tri_edges])
+    edge_elem_ids = np.concatenate([quad_elem_ids, tri_elem_ids])
+
+    # -------------------------------------------------------
+    # 2. Identify boundary edges
+    # -------------------------------------------------------
+    edges_sorted = np.sort(edges, axis=1)
+
+    _, inverse, counts = np.unique(
+        edges_sorted,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+
+    boundary_mask = counts[inverse] == 1
+
+    boundary_edges = edges[boundary_mask]
+    boundary_elem_ids = edge_elem_ids[boundary_mask]
+
+    if len(boundary_edges) == 0:
+        raise ValueError("No boundary edges found.")
+
+    # -------------------------------------------------------
+    # 3. Build node adjacency
+    # -------------------------------------------------------
+    adjacency = {}
+
+    for i, (n0, n1) in enumerate(boundary_edges):
+        adjacency.setdefault(n0, []).append((n1, i))
+        adjacency.setdefault(n1, []).append((n0, i))
+
+    # A closed simple boundary must have exactly 2 neighbors
+    invalid = {
+        n: len(neighbors)
+        for n, neighbors in adjacency.items()
+        if len(neighbors) != 2
+    }
+
+    if invalid:
+        raise ValueError(
+            f"Boundary is not a simple closed loop. "
+            f"Nodes with degree != 2: {invalid}"
+        )
+
+    # -------------------------------------------------------
+    # 4. Walk along the boundary
+    # -------------------------------------------------------
+    start_node = min(adjacency.keys())
+
+    ordered_nodes = [start_node]
+    ordered_edge_indices = []
+
+    current = start_node
+    previous = None
+
+    while True:
+
+        neighbors = adjacency[current]
+
+        # Select neighbor other than previous node
+        if previous is None:
+            next_node, edge_idx = neighbors[0]
+        else:
+            next_node, edge_idx = next(
+                (n, i)
+                for n, i in neighbors
+                if n != previous
+            )
+
+        ordered_edge_indices.append(edge_idx)
+
+        if next_node == start_node:
+            break
+
+        ordered_nodes.append(next_node)
+
+        previous = current
+        current = next_node
+
+        if len(ordered_nodes) > len(adjacency):
+            raise RuntimeError("Boundary traversal failed.")
+
+    if len(ordered_edge_indices) != len(boundary_edges):
+        raise ValueError(
+            "Multiple disconnected boundary loops detected."
+        )
+
+    ordered_nodes = np.asarray(ordered_nodes, dtype=int)
+    ordered_edge_indices = np.asarray(
+        ordered_edge_indices, dtype=int
+    )
+
+    n_boundary = len(ordered_nodes)
+
+    # -------------------------------------------------------
+    # 5. Create ordered boundary nodes
+    # -------------------------------------------------------
+    node_lookup = node.set_index("ID")
+
+    boundary_nodes = node_lookup.loc[
+        ordered_nodes, ["X", "Y"]
+    ].copy()
+
+    boundary_nodes.insert(0, "ID", ordered_nodes)
+
+    boundary_nodes["local_id"] = np.arange(
+        n_boundary, dtype=int
+    )
+
+    boundary_nodes = gpd.GeoDataFrame(
+        boundary_nodes.reset_index(drop=True),
+        geometry=gpd.points_from_xy(
+            boundary_nodes["X"],
+            boundary_nodes["Y"]
+        ),
+        crs=crs,
+    )
+
+    # -------------------------------------------------------
+    # 6. Create ordered boundary lines
+    # -------------------------------------------------------
+    nd_id0 = ordered_nodes
+    nd_id1 = np.roll(ordered_nodes, -1)
+
+    xy = boundary_nodes[["X", "Y"]].to_numpy()
+    xy_next = np.roll(xy, -1, axis=0)
+
+    lengths = np.linalg.norm(xy_next - xy, axis=1)
+
+    distances = np.concatenate([
+        [0.0],
+        np.cumsum(lengths[:-1])
+    ])
+
+    boundary_nodes["distance"] = distances
+
+    boundary_lines = gpd.GeoDataFrame(
+        {
+            "ID": boundary_elem_ids[ordered_edge_indices],
+            "nd_id0": nd_id0,
+            "nd_id1": nd_id1,
+            "nd_loc0": np.arange(n_boundary, dtype=int),
+            "nd_loc1": np.roll(
+                np.arange(n_boundary, dtype=int), -1
+            ),
+            "length": lengths,
+            "distance": distances,
+        },
+        geometry=[
+            LineString([p0, p1])
+            for p0, p1 in zip(xy, xy_next)
+        ],
+        crs=crs,
+    )
+
+    return boundary_nodes, boundary_lines
+
