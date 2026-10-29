@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
 import geopandas as gpd
+from collections import defaultdict
 from shapely.geometry import Polygon, Point, LineString
+import plotly.graph_objects as go
 
 def mesh_to_gdf(nodes, elements, crs):
     node_lookup = nodes.set_index("ID")[["X", "Y"]]
@@ -360,49 +362,70 @@ def watersheds_to_gdfs(watersheds, nodes_df, crs):
     return line_gdf, point_gdf
 
 
-def get_mesh_boundary(node, elem, crs="EPSG:26910"):
+def get_mesh_boundary(node, elem, crs="EPSG:26910",
+                      boundary_type="outer"):
     """
-    Extract ordered boundary nodes and edges from an IWFM quadrilateral mesh.
+    Extract ordered boundary nodes and edges from an IWFM mesh.
+
+    Supports triangular elements (ND4=0), quadrilateral elements,
+    and internal holes.
 
     Parameters
     ----------
-    node : pd.DataFrame
+    node : DataFrame
         Columns: ID, X, Y
 
-    elem : pd.DataFrame
+    elem : DataFrame
         Columns: IE, ND1, ND2, ND3, ND4
 
-    crs : str or CRS
+    crs : str or int
         Coordinate reference system.
+
+    boundary_type : {"outer", "all", "holes"}
+        "outer" : return the outer perimeter (default).
+        "all"   : return lists of all boundary loops.
+        "holes" : return lists of internal boundary loops.
 
     Returns
     -------
-    boundary_nodes : GeoDataFrame
-        ID       : original global node ID
-        local_id : sequential zero-based boundary node index
-        distance : cumulative distance along boundary
-        geometry : Point
+    For boundary_type="outer":
+        boundary_nodes, boundary_lines
 
-    boundary_lines : GeoDataFrame
-        ID       : original global element ID
-        nd_id0   : global ID of first node
-        nd_id1   : global ID of second node
-        nd_loc0  : local index of first node
-        nd_loc1  : local index of second node
-        length   : edge length
-        distance : cumulative distance at edge start
-        geometry : LineString
+    For boundary_type="all" or "holes":
+        node_loops, line_loops
+
+    boundary_nodes fields:
+        ID        : global node ID
+        X, Y      : coordinates
+        local_id  : zero-based boundary node index
+        distance  : cumulative distance along boundary
+        geometry  : Point
+
+    boundary_lines fields:
+        ID        : global element ID
+        nd_id0    : global starting node ID
+        nd_id1    : global ending node ID
+        nd_loc0   : local starting node index
+        nd_loc1   : local ending node index
+        length    : edge length
+        distance  : cumulative distance at edge start
+        geometry  : LineString
 
     Notes
     -----
-    - Boundary nodes and lines are ordered along the perimeter.
-    - The starting node is arbitrary.
-    - The final line connects back to the first node.
-    - Multiple disconnected boundary loops are not supported.
+    Assumes a connected mesh domain with one outer boundary
+    and zero or more holes.
+
+    All boundary loops must be simple and closed.
     """
 
+    if boundary_type not in ("outer", "all", "holes"):
+        raise ValueError(
+            "boundary_type must be 'outer', 'all', or 'holes'"
+        )
+
     # -------------------------------------------------------
-    # 1. Extract edges from triangular and quadrilateral elements
+    # 1. Extract triangle and quadrilateral edges
     # -------------------------------------------------------
     elem_nodes = elem[
         ["ND1", "ND2", "ND3", "ND4"]
@@ -410,11 +433,15 @@ def get_mesh_boundary(node, elem, crs="EPSG:26910"):
 
     elem_ids = elem["IE"].to_numpy(dtype=int)
 
-    # Separate triangles and quadrilaterals
     is_triangle = elem_nodes[:, 3] == 0
     is_quad = ~is_triangle
 
-    # Quadrilateral edges
+    tri_pairs = np.array([
+        [0, 1],
+        [1, 2],
+        [2, 0],
+    ])
+
     quad_pairs = np.array([
         [0, 1],
         [1, 2],
@@ -422,34 +449,36 @@ def get_mesh_boundary(node, elem, crs="EPSG:26910"):
         [3, 0],
     ])
 
+    tri_edges = elem_nodes[is_triangle][:, tri_pairs].reshape(-1, 2)
     quad_edges = elem_nodes[is_quad][:, quad_pairs].reshape(-1, 2)
-    quad_elem_ids = np.repeat(elem_ids[is_quad], 4)
 
-    # Triangular edges
-    tri_pairs = np.array([
-        [0, 1],
-        [1, 2],
-        [2, 0],
+    edges = np.vstack([tri_edges, quad_edges])
+
+    edge_elem_ids = np.concatenate([
+        np.repeat(elem_ids[is_triangle], 3),
+        np.repeat(elem_ids[is_quad], 4),
     ])
 
-    tri_edges = elem_nodes[is_triangle][:, tri_pairs].reshape(-1, 2)
-    tri_elem_ids = np.repeat(elem_ids[is_triangle], 3)
-
-    # Combine
-    edges = np.vstack([quad_edges, tri_edges])
-    edge_elem_ids = np.concatenate([quad_elem_ids, tri_elem_ids])
+    if np.any(edges <= 0):
+        raise ValueError("Invalid node ID found in mesh edges.")
 
     # -------------------------------------------------------
     # 2. Identify boundary edges
     # -------------------------------------------------------
-    edges_sorted = np.sort(edges, axis=1)
+    sorted_edges = np.sort(edges, axis=1)
 
     _, inverse, counts = np.unique(
-        edges_sorted,
+        sorted_edges,
         axis=0,
         return_inverse=True,
         return_counts=True,
     )
+
+    if np.any(counts > 2):
+        raise ValueError(
+            "Non-manifold mesh: some edges belong to more "
+            "than two elements."
+        )
 
     boundary_mask = counts[inverse] == 1
 
@@ -460,137 +489,935 @@ def get_mesh_boundary(node, elem, crs="EPSG:26910"):
         raise ValueError("No boundary edges found.")
 
     # -------------------------------------------------------
-    # 3. Build node adjacency
+    # 3. Build adjacency
     # -------------------------------------------------------
-    adjacency = {}
+    adjacency = defaultdict(list)
 
     for i, (n0, n1) in enumerate(boundary_edges):
-        adjacency.setdefault(n0, []).append((n1, i))
-        adjacency.setdefault(n1, []).append((n0, i))
+        adjacency[int(n0)].append((int(n1), i))
+        adjacency[int(n1)].append((int(n0), i))
 
-    # A closed simple boundary must have exactly 2 neighbors
-    invalid = {
-        n: len(neighbors)
-        for n, neighbors in adjacency.items()
+    invalid = [
+        n for n, neighbors in adjacency.items()
         if len(neighbors) != 2
-    }
+    ]
 
     if invalid:
         raise ValueError(
-            f"Boundary is not a simple closed loop. "
-            f"Nodes with degree != 2: {invalid}"
+            f"Boundary contains {len(invalid)} nodes "
+            f"with degree != 2. Examples: {invalid[:10]}"
         )
 
     # -------------------------------------------------------
-    # 4. Walk along the boundary
+    # 4. Traverse all closed boundary loops
     # -------------------------------------------------------
-    start_node = min(adjacency.keys())
+    visited_edges = set()
+    loops = []
 
-    ordered_nodes = [start_node]
-    ordered_edge_indices = []
+    for start_edge in range(len(boundary_edges)):
 
-    current = start_node
-    previous = None
+        if start_edge in visited_edges:
+            continue
 
-    while True:
+        start_node = int(boundary_edges[start_edge, 0])
+        current = start_node
+        previous = None
 
-        neighbors = adjacency[current]
+        ordered_nodes = []
+        ordered_edges = []
 
-        # Select neighbor other than previous node
-        if previous is None:
-            next_node, edge_idx = neighbors[0]
-        else:
-            next_node, edge_idx = next(
-                (n, i)
-                for n, i in neighbors
-                if n != previous
-            )
+        while True:
 
-        ordered_edge_indices.append(edge_idx)
+            ordered_nodes.append(current)
 
-        if next_node == start_node:
-            break
+            candidates = [
+                (n, idx)
+                for n, idx in adjacency[current]
+                if idx not in visited_edges
+            ]
 
-        ordered_nodes.append(next_node)
+            if not candidates:
+                raise ValueError(
+                    "Boundary traversal failed: open or "
+                    "inconsistent boundary."
+                )
 
-        previous = current
-        current = next_node
+            if previous is None:
+                next_node, edge_idx = next(
+                    ((n, idx) for n, idx in candidates
+                     if idx == start_edge),
+                    candidates[0]
+                )
+            else:
+                next_node, edge_idx = next(
+                    ((n, idx) for n, idx in candidates
+                     if n != previous),
+                    candidates[0]
+                )
 
-        if len(ordered_nodes) > len(adjacency):
-            raise RuntimeError("Boundary traversal failed.")
+            visited_edges.add(edge_idx)
+            ordered_edges.append(edge_idx)
 
-    if len(ordered_edge_indices) != len(boundary_edges):
-        raise ValueError(
-            "Multiple disconnected boundary loops detected."
-        )
+            if next_node == start_node:
+                break
 
-    ordered_nodes = np.asarray(ordered_nodes, dtype=int)
-    ordered_edge_indices = np.asarray(
-        ordered_edge_indices, dtype=int
-    )
+            previous = current
+            current = next_node
 
-    n_boundary = len(ordered_nodes)
+        loops.append((
+            np.asarray(ordered_nodes, dtype=int),
+            np.asarray(ordered_edges, dtype=int)
+        ))
 
     # -------------------------------------------------------
-    # 5. Create ordered boundary nodes
+    # 5. Determine outer loop by enclosed area
     # -------------------------------------------------------
     node_lookup = node.set_index("ID")
 
-    boundary_nodes = node_lookup.loc[
-        ordered_nodes, ["X", "Y"]
-    ].copy()
+    loop_areas = []
 
-    boundary_nodes.insert(0, "ID", ordered_nodes)
+    for ordered_nodes, _ in loops:
 
-    boundary_nodes["local_id"] = np.arange(
-        n_boundary, dtype=int
-    )
+        xy = node_lookup.loc[
+            ordered_nodes, ["X", "Y"]
+        ].to_numpy()
 
-    boundary_nodes = gpd.GeoDataFrame(
-        boundary_nodes.reset_index(drop=True),
-        geometry=gpd.points_from_xy(
-            boundary_nodes["X"],
-            boundary_nodes["Y"]
-        ),
-        crs=crs,
+        poly = Polygon(xy)
+
+        if not poly.is_valid:
+            raise ValueError(
+                "Invalid boundary polygon encountered."
+            )
+
+        loop_areas.append(poly.area)
+
+    outer_idx = int(np.argmax(loop_areas))
+
+    # Outer loop first, remaining loops by decreasing area
+    loop_order = [outer_idx] + sorted(
+        [i for i in range(len(loops)) if i != outer_idx],
+        key=lambda i: loop_areas[i],
+        reverse=True
     )
 
     # -------------------------------------------------------
-    # 6. Create ordered boundary lines
+    # 6. Build ordered GeoDataFrames
     # -------------------------------------------------------
-    nd_id0 = ordered_nodes
-    nd_id1 = np.roll(ordered_nodes, -1)
+    node_loops = []
+    line_loops = []
 
-    xy = boundary_nodes[["X", "Y"]].to_numpy()
-    xy_next = np.roll(xy, -1, axis=0)
+    for loop_idx in loop_order:
 
-    lengths = np.linalg.norm(xy_next - xy, axis=1)
+        ordered_nodes, ordered_edges = loops[loop_idx]
 
-    distances = np.concatenate([
-        [0.0],
-        np.cumsum(lengths[:-1])
-    ])
+        n = len(ordered_nodes)
 
-    boundary_nodes["distance"] = distances
+        # Ordered boundary nodes
+        bnodes = node_lookup.loc[
+            ordered_nodes, ["X", "Y"]
+        ].copy()
 
-    boundary_lines = gpd.GeoDataFrame(
-        {
-            "ID": boundary_elem_ids[ordered_edge_indices],
-            "nd_id0": nd_id0,
-            "nd_id1": nd_id1,
-            "nd_loc0": np.arange(n_boundary, dtype=int),
-            "nd_loc1": np.roll(
-                np.arange(n_boundary, dtype=int), -1
+        bnodes.insert(0, "ID", ordered_nodes)
+
+        bnodes["local_id"] = np.arange(n, dtype=int)
+
+        bnodes = gpd.GeoDataFrame(
+            bnodes.reset_index(drop=True),
+            geometry=gpd.points_from_xy(
+                bnodes["X"], bnodes["Y"]
             ),
-            "length": lengths,
-            "distance": distances,
-        },
-        geometry=[
-            LineString([p0, p1])
-            for p0, p1 in zip(xy, xy_next)
-        ],
-        crs=crs,
+            crs=crs,
+        )
+
+        # Ordered boundary edges
+        xy = bnodes[["X", "Y"]].to_numpy()
+        xy_next = np.roll(xy, -1, axis=0)
+
+        lengths = np.linalg.norm(
+            xy_next - xy, axis=1
+        )
+
+        distances = np.concatenate([
+            [0.0],
+            np.cumsum(lengths[:-1])
+        ])
+
+        bnodes["distance"] = distances
+
+        blines = gpd.GeoDataFrame(
+            {
+                "ID": boundary_elem_ids[ordered_edges],
+                "nd_id0": ordered_nodes,
+                "nd_id1": np.roll(ordered_nodes, -1),
+                "nd_loc0": np.arange(n, dtype=int),
+                "nd_loc1": np.roll(
+                    np.arange(n, dtype=int), -1
+                ),
+                "length": lengths,
+                "distance": distances,
+            },
+            geometry=[
+                LineString([p0, p1])
+                for p0, p1 in zip(xy, xy_next)
+            ],
+            crs=crs,
+        )
+
+        node_loops.append(bnodes)
+        line_loops.append(blines)
+
+    # -------------------------------------------------------
+    # 7. Return requested boundary type
+    # -------------------------------------------------------
+    if boundary_type == "outer":
+        return node_loops[0], line_loops[0]
+
+    if boundary_type == "holes":
+        return node_loops[1:], line_loops[1:]
+
+    return node_loops, line_loops
+
+
+def get_boundary_parts(bnd_nodes, bnd_lines, field, threshold,
+                       use_abs=None):
+    """
+    Identify continuous boundary parts satisfying a field threshold.
+
+    Parameters
+    ----------
+    bnd_nodes : GeoDataFrame
+        Ordered boundary nodes with the selected statistic.
+        Must contain 'ID' and 'local_id'.
+
+    bnd_lines : GeoDataFrame
+        Ordered boundary edges with 'nd_loc0', 'nd_loc1', 'length'.
+
+    field : str
+        Field to evaluate, e.g. 'slope_monthly_L1' or 'std_yearly_L2'.
+
+    threshold : float
+        Maximum allowed value (strictly less than).
+
+    use_abs : bool, optional
+        If None, automatically True for slope fields and False
+        for other fields.
+
+    Returns
+    -------
+    parts : list of dict
+        Each dictionary contains:
+            'nodes'       : ordered node GeoDataFrame
+            'lines'       : ordered line GeoDataFrame
+            'length'      : total boundary length (m)
+            'length_km'   : total boundary length (km)
+            'n_nodes'     : number of nodes
+            'n_segments'  : number of edges
+
+    Notes
+    -----
+    An edge is valid only if BOTH endpoints satisfy the threshold.
+    Isolated valid nodes are excluded.
+    The boundary is treated as a closed loop.
+    """
+
+    if use_abs is None:
+        use_abs = field.startswith("slope")
+
+    if threshold < 0:
+        raise ValueError("threshold must be non-negative")
+
+    n = len(bnd_nodes)
+
+    if len(bnd_lines) != n:
+        raise ValueError(
+            "Expected one boundary edge per boundary node."
+        )
+
+    # Verify ordered boundary topology
+    idx = np.arange(n)
+
+    if not np.array_equal(
+        bnd_lines["nd_loc0"].to_numpy(), idx
+    ) or not np.array_equal(
+        bnd_lines["nd_loc1"].to_numpy(), (idx + 1) % n
+    ):
+        raise ValueError(
+            "Boundary nodes and lines are not consistently ordered."
+        )
+
+    # -------------------------------------------------------
+    # 1. Identify valid nodes
+    # -------------------------------------------------------
+    values = bnd_nodes[field].to_numpy(dtype=float)
+
+    if use_abs:
+        valid_nodes = np.isfinite(values) & (
+            np.abs(values) < threshold
+        )
+    else:
+        valid_nodes = np.isfinite(values) & (
+            values < threshold
+        )
+
+    # -------------------------------------------------------
+    # 2. Identify valid edges
+    # -------------------------------------------------------
+    # Edge i connects node i to node (i+1) % n
+    valid_edges = valid_nodes & np.roll(valid_nodes, -1)
+
+    if not valid_edges.any():
+        return []
+
+    # -------------------------------------------------------
+    # 3. Group consecutive valid edges (circular boundary)
+    # -------------------------------------------------------
+    if valid_edges.all():
+        edge_groups = [np.arange(n)]
+    else:
+        # A valid edge preceded by an invalid edge starts a part
+        starts = np.where(
+            valid_edges & ~np.roll(valid_edges, 1)
+        )[0]
+
+        edge_groups = []
+
+        for start in starts:
+            group = []
+            i = int(start)
+
+            while valid_edges[i]:
+                group.append(i)
+                i = (i + 1) % n
+
+            edge_groups.append(np.asarray(group, dtype=int))
+
+    # -------------------------------------------------------
+    # 4. Build output dictionaries
+    # -------------------------------------------------------
+    parts = []
+
+    for group in edge_groups:
+
+        # Consecutive edges: collect starting nodes and final node
+        if len(group) == n:
+            node_idx = np.arange(n)
+        else:
+            node_idx = np.r_[
+                group,
+                (group[-1] + 1) % n
+            ]
+
+        part_nodes = bnd_nodes.iloc[node_idx].copy()
+        part_lines = bnd_lines.iloc[group].copy()
+
+        # Reset row indices, preserve original local_id
+        part_nodes = part_nodes.reset_index(drop=True)
+        part_lines = part_lines.reset_index(drop=True)
+
+        # Distance measured from start of this part
+        edge_lengths = part_lines["length"].to_numpy()
+
+        if len(group) == n:
+            node_dist = np.r_[
+                0.0, np.cumsum(edge_lengths[:-1])
+            ]
+        else:
+            node_dist = np.r_[
+                0.0, np.cumsum(edge_lengths)
+            ]
+
+        part_nodes["part_distance"] = node_dist
+        part_lines["part_distance"] = np.r_[
+            0.0, np.cumsum(edge_lengths[:-1])
+        ]
+
+        total_length = float(edge_lengths.sum())
+
+        parts.append({
+            "nodes": part_nodes,
+            "lines": part_lines,
+            "length": total_length,
+            "length_km": total_length / 1000.0,
+            "n_nodes": len(part_nodes),
+            "n_segments": len(part_lines),
+        })
+
+    # Sort longest boundary parts first
+    parts.sort(key=lambda p: p["length"], reverse=True)
+
+    return parts
+
+
+def get_stable_boundary_parts(
+    bnd_nodes,
+    bnd_lines,
+    slope_field,
+    std_field,
+    slope_threshold,
+    std_threshold,
+):
+    """
+    Identify continuous boundary parts satisfying BOTH:
+        abs(slope) < slope_threshold
+        std        < std_threshold
+
+    A boundary edge is valid only when both endpoint nodes
+    satisfy both conditions.
+
+    Assumes a single closed, ordered boundary loop.
+
+    Returns
+    -------
+    parts : list of dictionaries
+        nodes       : GeoDataFrame of ordered nodes
+        lines       : GeoDataFrame of ordered boundary edges
+        length      : total length (m)
+        length_km   : total length (km)
+        n_nodes     : number of nodes
+        n_segments  : number of edges
+    """
+
+    if slope_threshold < 0 or std_threshold < 0:
+        raise ValueError("Thresholds must be non-negative.")
+
+    n = len(bnd_nodes)
+
+    if len(bnd_lines) != n:
+        raise ValueError("Expected one edge per boundary node.")
+
+    # Verify topology
+    idx = np.arange(n)
+
+    if not np.array_equal(
+        bnd_lines["nd_loc0"].to_numpy(), idx
+    ) or not np.array_equal(
+        bnd_lines["nd_loc1"].to_numpy(), (idx + 1) % n
+    ):
+        raise ValueError(
+            "Boundary nodes and lines are not consistently ordered."
+        )
+
+    # -------------------------------------------------------
+    # 1. Valid nodes: both criteria must be satisfied
+    # -------------------------------------------------------
+    slope = bnd_nodes[slope_field].to_numpy(dtype=float)
+    std = bnd_nodes[std_field].to_numpy(dtype=float)
+
+    valid_nodes = (
+        np.isfinite(slope)
+        & np.isfinite(std)
+        & (np.abs(slope) < slope_threshold)
+        & (std >= 0)
+        & (std < std_threshold)
     )
 
-    return boundary_nodes, boundary_lines
+    # -------------------------------------------------------
+    # 2. Valid edges: both endpoints must be valid
+    # -------------------------------------------------------
+    valid_edges = valid_nodes & np.roll(valid_nodes, -1)
 
+    if not valid_edges.any():
+        return []
+
+    # -------------------------------------------------------
+    # 3. Identify continuous edge groups (circular boundary)
+    # -------------------------------------------------------
+    if valid_edges.all():
+        edge_groups = [np.arange(n)]
+    else:
+        starts = np.where(
+            valid_edges & ~np.roll(valid_edges, 1)
+        )[0]
+
+        edge_groups = []
+
+        for start in starts:
+            group = []
+            i = int(start)
+
+            while valid_edges[i]:
+                group.append(i)
+                i = (i + 1) % n
+
+            edge_groups.append(np.asarray(group, dtype=int))
+
+    # -------------------------------------------------------
+    # 4. Construct boundary parts
+    # -------------------------------------------------------
+    parts = []
+
+    for group in edge_groups:
+
+        if len(group) == n:
+            node_idx = np.arange(n)
+        else:
+            node_idx = np.r_[
+                group,
+                (group[-1] + 1) % n
+            ]
+
+        part_nodes = (
+            bnd_nodes.iloc[node_idx]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        part_lines = (
+            bnd_lines.iloc[group]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        edge_lengths = part_lines["length"].to_numpy(dtype=float)
+
+        if len(group) == n:
+            node_dist = np.r_[
+                0.0,
+                np.cumsum(edge_lengths[:-1])
+            ]
+        else:
+            node_dist = np.r_[
+                0.0,
+                np.cumsum(edge_lengths)
+            ]
+
+        part_nodes["part_distance"] = node_dist
+
+        part_lines["part_distance"] = np.r_[
+            0.0,
+            np.cumsum(edge_lengths[:-1])
+        ]
+
+        total_length = float(edge_lengths.sum())
+
+        parts.append({
+            "nodes": part_nodes,
+            "lines": part_lines,
+            "length": total_length,
+            "length_km": total_length / 1000.0,
+            "n_nodes": len(part_nodes),
+            "n_segments": len(part_lines),
+        })
+
+    parts.sort(key=lambda p: p["length"], reverse=True)
+
+    return parts
+
+
+def plot_stable_boundary_parts(
+    bnd_nodes,
+    bnd_lines,
+    parts,
+    layer=1,
+    color_field=None,
+    marker_size=6,
+    fig=None,
+):
+    """
+    Optimized Plotly visualization of stable boundary parts.
+
+    Parameters
+    ----------
+    bnd_nodes : GeoDataFrame
+        Original boundary nodes with statistics.
+
+    bnd_lines : GeoDataFrame
+        Original boundary edges.
+
+    parts : list of dict
+        Output from get_stable_boundary_parts().
+
+    layer : int
+        C2VSim layer (1-4), used for hover statistics.
+
+    color_field : str, optional
+        Field used to color stable boundary nodes.
+        Default: std_yearly_L{layer}.
+
+    marker_size : float
+        Marker size.
+
+    fig : go.Figure, optional
+        Existing Plotly figure.
+
+    Returns
+    -------
+    fig : go.Figure
+    """
+
+    std_field = f"std_yearly_L{layer}"
+    slope_field = f"slope_yearly_L{layer}"
+
+    if color_field is None:
+        color_field = std_field
+
+    if fig is None:
+        fig = go.Figure()
+
+    # -------------------------------------------------------
+    # 1. Entire CV boundary (single trace)
+    # -------------------------------------------------------
+    x_all, y_all = [], []
+
+    for line in bnd_lines.geometry:
+        x, y = line.xy
+
+        x_all.extend(x)
+        x_all.append(None)
+
+        y_all.extend(y)
+        y_all.append(None)
+
+    fig.add_trace(go.Scatter(
+        x=x_all,
+        y=y_all,
+        mode="lines",
+        line=dict(color="lightgray", width=1),
+        hoverinfo="skip",
+        name="CV boundary",
+        showlegend=True,
+    ))
+
+    # -------------------------------------------------------
+    # 2. Stable boundary lines (single trace)
+    # -------------------------------------------------------
+    x_stable, y_stable = [], []
+
+    for part in parts:
+        for line in part["lines"].geometry:
+            x, y = line.xy
+
+            x_stable.extend(x)
+            x_stable.append(None)
+
+            y_stable.extend(y)
+            y_stable.append(None)
+
+    if x_stable:
+        fig.add_trace(go.Scatter(
+            x=x_stable,
+            y=y_stable,
+            mode="lines",
+            line=dict(color="black", width=3),
+            hoverinfo="skip",
+            name="Stable boundary",
+            showlegend=True,
+        ))
+
+    # -------------------------------------------------------
+    # 3. Combine all stable nodes into one dataset
+    # -------------------------------------------------------
+    if parts:
+
+        node_frames = []
+
+        for i, part in enumerate(parts):
+
+            tmp = part["nodes"].copy()
+
+            tmp["part_id"] = i + 1
+            tmp["part_length_km"] = part["length_km"]
+
+            node_frames.append(tmp)
+
+        import pandas as pd
+
+        stable_nodes = pd.concat(
+            node_frames,
+            ignore_index=True
+        )
+
+        # ---------------------------------------------------
+        # 4. Color scale
+        # ---------------------------------------------------
+        values = stable_nodes[color_field].to_numpy(dtype=float)
+
+        finite = values[np.isfinite(values)]
+
+        if len(finite):
+            cmin = float(finite.min())
+            cmax = float(finite.max())
+
+            if color_field.startswith("slope"):
+                vmax = max(abs(cmin), abs(cmax))
+                cmin, cmax = -vmax, vmax
+                colorscale = "RdBu_r"
+            else:
+                colorscale = "Viridis"
+
+            if cmin == cmax:
+                cmin -= 0.5
+                cmax += 0.5
+        else:
+            cmin, cmax = 0, 1
+            colorscale = "Viridis"
+
+        # ---------------------------------------------------
+        # 5. Hover information
+        # ---------------------------------------------------
+        customdata = np.column_stack([
+            stable_nodes["part_id"].to_numpy(),
+            stable_nodes["ID"].to_numpy(),
+            stable_nodes["distance"].to_numpy() / 1000,
+            stable_nodes["part_distance"].to_numpy() / 1000,
+            stable_nodes["part_length_km"].to_numpy(),
+            stable_nodes[std_field].to_numpy(),
+            stable_nodes[slope_field].to_numpy(),
+        ])
+
+        hovertemplate = (
+            "<b>Part %{customdata[0]:.0f}</b><br>"
+            "Node ID: %{customdata[1]:.0f}<br>"
+            "Boundary distance: %{customdata[2]:.2f} km<br>"
+            "Part distance: %{customdata[3]:.2f} km<br>"
+            "Part length: %{customdata[4]:.2f} km<br><br>"
+            f"<b>Layer {layer}</b><br>"
+            "STD yearly: %{customdata[5]:.3f} m<br>"
+            "Slope yearly: %{customdata[6]:+.3f} m/year<br>"
+            f"{color_field}: %{{marker.color:.3f}}"
+            "<extra></extra>"
+        )
+
+        # ---------------------------------------------------
+        # 6. Stable nodes (single trace)
+        # ---------------------------------------------------
+        fig.add_trace(go.Scatter(
+            x=stable_nodes.geometry.x.to_numpy(),
+            y=stable_nodes.geometry.y.to_numpy(),
+            mode="markers",
+            customdata=customdata,
+            marker=dict(
+                size=marker_size,
+                color=values,
+                colorscale=colorscale,
+                cmin=cmin,
+                cmax=cmax,
+                showscale=True,
+                colorbar=dict(title=color_field),
+                line=dict(width=0),
+            ),
+            hovertemplate=hovertemplate,
+            name="Stable nodes",
+            showlegend=False,
+        ))
+
+    # -------------------------------------------------------
+    # 7. Summary
+    # -------------------------------------------------------
+    total_length = sum(p["length"] for p in parts)
+    cv_length = bnd_lines["length"].sum()
+
+    percentage = (
+        100 * total_length / cv_length
+        if cv_length > 0 else 0
+    )
+
+    fig.update_layout(
+        title=(
+            f"Stable boundary parts — Layer {layer}"
+            f"<br><sup>{len(parts)} parts | "
+            f"{total_length / 1000:.1f} km | "
+            f"{percentage:.1f}% of CV boundary</sup>"
+        ),
+        xaxis_title="Easting (m)",
+        yaxis_title="Northing (m)",
+        #template="plotly_white",
+        width=1100,
+        height=850,
+        hovermode="closest",
+        legend=dict(
+            x=0.01,
+            y=0.99,
+            xanchor="left",
+            yanchor="top",
+        ),
+    )
+
+    fig.update_yaxes(
+        scaleanchor="x",
+        scaleratio=1
+    )
+
+    return fig
+
+
+def assign_boundary_head_elevations(
+    edited_parts,
+    bnd_nodes_stats,
+    strat_elev,
+):
+    """
+    Assign global row IDs to edited boundary nodes and build
+    separate arrays for NPSAT boundary heads and elevations.
+
+    Parameters
+    ----------
+    edited_parts : list of dict
+        Edited projected boundary parts.
+        Each part contains a 'nodes' GeoDataFrame with original
+        C2VSim node IDs in column 'ID'.
+
+    bnd_nodes_stats : GeoDataFrame
+        Original boundary statistics containing:
+            ID, mean_L1, mean_L2, mean_L3, mean_L4
+
+    strat_elev : tuple
+        Output of iwfm_u.stratigraphy_to_elevations():
+            ids, elev, elev_cols
+
+    Returns
+    -------
+    parts_out : list of dict
+        Copies of edited_parts with 'row_id' added to nodes.
+
+    bc_heads : ndarray, shape (N, 4)
+        Mean heads for the four C2VSim layers (m).
+
+    bc_elev : ndarray, shape (N, 3)
+        Interlayer elevations:
+            BOT_L1, BOT_L2, BOT_L3 (m).
+
+    Notes
+    -----
+    row_id is a global zero-based index across all parts.
+
+    Nodes appearing in multiple parts receive separate row IDs.
+    No spatial interpolation is performed.
+    """
+
+    # -------------------------------------------------------
+    # 1. Extract stratigraphy arrays
+    # -------------------------------------------------------
+    strat_ids, elevations, elev_cols = strat_elev
+
+    strat_ids = np.asarray(strat_ids, dtype=int)
+    elevations = np.asarray(elevations, dtype=float)
+
+    head_cols = [
+        "mean_L1",
+        "mean_L2",
+        "mean_L3",
+        "mean_L4",
+    ]
+
+    required_elev_cols = [
+        "BOT_L1",
+        "BOT_L2",
+        "BOT_L3",
+    ]
+
+    elev_indices = [
+        elev_cols.index(col)
+        for col in required_elev_cols
+    ]
+
+    # -------------------------------------------------------
+    # 2. Create lookup tables using original node IDs
+    # -------------------------------------------------------
+    stats_ids = bnd_nodes_stats["ID"].to_numpy(dtype=int)
+
+    if len(np.unique(stats_ids)) != len(stats_ids):
+        raise ValueError("Duplicate node IDs in bnd_nodes_stats.")
+
+    if len(np.unique(strat_ids)) != len(strat_ids):
+        raise ValueError("Duplicate node IDs in strat_elev.")
+
+    if elevations.shape[0] != len(strat_ids):
+        raise ValueError("Stratigraphy ID/elevation shape mismatch.")
+
+    stats_lookup = {
+        int(node_id): i
+        for i, node_id in enumerate(stats_ids)
+    }
+
+    strat_lookup = {
+        int(node_id): i
+        for i, node_id in enumerate(strat_ids)
+    }
+
+    head_values = bnd_nodes_stats[
+        head_cols
+    ].to_numpy(dtype=float)
+
+    elev_values = elevations[:, elev_indices]
+
+    # -------------------------------------------------------
+    # 3. Assign global row IDs and build arrays
+    # -------------------------------------------------------
+    parts_out = []
+
+    heads_list = []
+    elev_list = []
+
+    row_offset = 0
+
+    for part in edited_parts:
+
+        new_part = part.copy()
+        nodes = part["nodes"].copy().reset_index(drop=True)
+
+        node_ids = nodes["ID"].to_numpy(dtype=int)
+
+        missing_stats = [
+            nid for nid in node_ids
+            if nid not in stats_lookup
+        ]
+
+        missing_strat = [
+            nid for nid in node_ids
+            if nid not in strat_lookup
+        ]
+
+        if missing_stats or missing_strat:
+            raise ValueError(
+                f"Missing node IDs. "
+                f"Stats: {missing_stats[:10]}, "
+                f"Stratigraphy: {missing_strat[:10]}"
+            )
+
+        stats_idx = np.array([
+            stats_lookup[nid] for nid in node_ids
+        ], dtype=int)
+
+        strat_idx = np.array([
+            strat_lookup[nid] for nid in node_ids
+        ], dtype=int)
+
+        n = len(nodes)
+
+        nodes["row_id"] = np.arange(
+            row_offset,
+            row_offset + n,
+            dtype=int
+        )
+
+        heads_list.append(head_values[stats_idx])
+        elev_list.append(elev_values[strat_idx])
+
+        new_part["nodes"] = nodes
+        parts_out.append(new_part)
+
+        row_offset += n
+
+    # -------------------------------------------------------
+    # 4. Assemble final arrays
+    # -------------------------------------------------------
+    bc_heads = (
+        np.vstack(heads_list)
+        if heads_list
+        else np.empty((0, 4), dtype=float)
+    )
+
+    bc_elev = (
+        np.vstack(elev_list)
+        if elev_list
+        else np.empty((0, 3), dtype=float)
+    )
+
+    if not np.isfinite(bc_heads).all():
+        raise ValueError("Non-finite values found in bc_heads.")
+
+    if not np.isfinite(bc_elev).all():
+        raise ValueError("Non-finite values found in bc_elev.")
+
+    return parts_out, bc_heads, bc_elev

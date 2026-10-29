@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
 
+
+
 def write_scatter_interpolant(prefix, node_xy, tri_ids, data,HOR_type,VER_type, return_filenames=False,):
     """
         Write scattered interpolant geometry/connectivity and values files.
@@ -1581,3 +1583,169 @@ def create_partitioned_gridded_interpolant(partitions):
         return result
 
     return interp
+
+
+def remove_nodes_from_projected_parts(
+    projected_parts,
+    nodes_to_remove,
+):
+    """
+    Remove selected nodes from projected boundary parts and
+    split the remaining continuous sections.
+
+    Parameters
+    ----------
+    projected_parts : list of dict
+        Output of project_boundary_parts_to_npsat().
+
+    nodes_to_remove : dict
+        {part_id: [node_id1, node_id2, ...]}
+        Part IDs are 1-based, matching Plotly hover.
+
+    Returns
+    -------
+    new_parts : list of dict
+        Updated boundary parts, excluding sections with
+        fewer than two nodes.
+
+        Additional dictionary fields:
+            original_part_id
+            subpart_id
+    """
+
+    new_parts = []
+
+    for part_idx, part in enumerate(projected_parts):
+
+        original_part_id = part_idx + 1
+
+        nodes = part["nodes"].reset_index(drop=True)
+        lines = part["lines"].reset_index(drop=True)
+
+        remove_ids = set(
+            nodes_to_remove.get(original_part_id, [])
+        )
+
+        node_ids = nodes["ID"].to_numpy()
+
+        keep = ~np.isin(node_ids, list(remove_ids))
+
+        n = len(nodes)
+
+        if n == 0:
+            continue
+
+        # A fully closed boundary has n edges for n nodes.
+        # An ordinary open part has n-1 edges.
+        is_closed = len(lines) == n
+
+        # For a closed part, rotate the sequence so that it
+        # begins immediately after a removed node.
+        # This converts the surviving runs into open sections.
+        if is_closed and not keep.all():
+
+            first_removed = np.flatnonzero(~keep)[0]
+            start = (first_removed + 1) % n
+
+            order = np.r_[
+                np.arange(start, n),
+                np.arange(0, start)
+            ]
+
+            nodes = nodes.iloc[order].reset_index(drop=True)
+            node_ids = nodes["ID"].to_numpy()
+            keep = ~np.isin(node_ids, list(remove_ids))
+
+            # Match original lines to their starting node
+            line_starts = lines["nd_loc0"].to_numpy()
+            node_local_ids = nodes["local_id"].to_numpy()
+
+            line_lookup = {
+                int(v): i
+                for i, v in enumerate(line_starts)
+            }
+
+            line_order = [
+                line_lookup[int(v)]
+                for v in node_local_ids
+            ]
+
+            lines = lines.iloc[line_order].reset_index(drop=True)
+
+            is_closed = False
+
+        # ---------------------------------------------------
+        # Identify consecutive runs of surviving nodes
+        # ---------------------------------------------------
+        padded = np.r_[False, keep, False]
+
+        starts = np.flatnonzero(
+            ~padded[:-1] & padded[1:]
+        )
+
+        ends = np.flatnonzero(
+            padded[:-1] & ~padded[1:]
+        )
+
+        subpart_id = 0
+
+        for start, end in zip(starts, ends):
+
+            # end is exclusive
+            if end - start < 2:
+                continue
+
+            sub_nodes = (
+                nodes.iloc[start:end]
+                .copy()
+                .reset_index(drop=True)
+            )
+
+            # Each consecutive pair of surviving nodes
+            # corresponds to one original boundary edge.
+            sub_lines = (
+                lines.iloc[start:end - 1]
+                .copy()
+                .reset_index(drop=True)
+            )
+
+            if len(sub_lines) != len(sub_nodes) - 1:
+                raise ValueError(
+                    "Node/edge topology mismatch."
+                )
+
+            lengths = sub_lines["length"].to_numpy(
+                dtype=float
+            )
+
+            # Cumulative distance from start of subpart
+            sub_nodes["part_distance"] = np.r_[
+                0.0,
+                np.cumsum(lengths)
+            ]
+
+            sub_lines["part_distance"] = np.r_[
+                0.0,
+                np.cumsum(lengths[:-1])
+            ]
+
+            total_length = float(lengths.sum())
+
+            subpart_id += 1
+
+            new_part = part.copy()
+
+            new_part.update({
+                "nodes": sub_nodes,
+                "lines": sub_lines,
+                "length": total_length,
+                "length_km": total_length / 1000.0,
+                "n_nodes": len(sub_nodes),
+                "n_segments": len(sub_lines),
+                "original_part_id": original_part_id,
+                "subpart_id": subpart_id,
+            })
+
+            new_parts.append(new_part)
+
+    return new_parts
