@@ -1749,3 +1749,453 @@ def remove_nodes_from_projected_parts(
             new_parts.append(new_part)
 
     return new_parts
+
+def write_npsat_dirichlet_parts(
+    final_parts,
+    final_heads,
+    final_elev,
+    output_dir,
+    model_name,
+    bbox_margin=1.0,
+    horizontal_interp="LINEAR",
+    vertical_interp="NEAREST",
+    dry_run=False,
+    validate=True,
+):
+    """
+    Write NPSAT Dirichlet BC files using LATERAL_POLYLINE.
+
+    Creates
+    -------
+    <model_name>_dirichlet.dat
+
+    For each part:
+        <model_name>_BND_<total>_<part>_master.dat
+        <model_name>_BND_<total>_<part>_pline.dat
+        <model_name>_BND_<total>_<part>_head_values.dat
+
+    Parameters
+    ----------
+    final_parts : list of dict
+        Reconstructed NPSAT boundary parts.
+        Each part contains nodes with X, Y, row_id.
+
+    final_heads : ndarray (N, 4)
+        Four layer-specific heads, in meters.
+
+    final_elev : ndarray (N, 3)
+        Three interlayer elevations, in meters:
+            BOT_L1, BOT_L2, BOT_L3
+
+    output_dir : str or Path
+        Directory for output files.
+
+    model_name : str
+        Model filename prefix.
+
+    bbox_margin : float
+        XY bounding-box margin in meters.
+
+    horizontal_interp : str
+        LINEAR or NEAREST.
+
+    vertical_interp : str
+        LINEAR or NEAREST.
+
+    dry_run : bool
+        If True, validate and print filenames without writing.
+
+    validate : bool
+        If True, read back written files and verify dimensions.
+
+    Returns
+    -------
+    Path
+        Main Dirichlet boundary file.
+    """
+
+    # -------------------------------------------------------
+    # 1. Validate input arrays
+    # -------------------------------------------------------
+    final_heads = np.asarray(final_heads, dtype=float)
+    final_elev = np.asarray(final_elev, dtype=float)
+
+    if final_heads.ndim != 2 or final_heads.shape[1] != 4:
+        raise ValueError(
+            "final_heads must have shape (N, 4)."
+        )
+
+    if final_elev.shape != (final_heads.shape[0], 3):
+        raise ValueError(
+            "final_elev must have shape (N, 3)."
+        )
+
+    if not np.isfinite(final_heads).all():
+        raise ValueError("final_heads contains NaN or Inf.")
+
+    if not np.isfinite(final_elev).all():
+        raise ValueError("final_elev contains NaN or Inf.")
+
+    if horizontal_interp not in ("LINEAR", "NEAREST"):
+        raise ValueError("Invalid horizontal interpolation.")
+
+    if vertical_interp not in ("LINEAR", "NEAREST"):
+        raise ValueError("Invalid vertical interpolation.")
+
+    if bbox_margin <= 0:
+        raise ValueError("bbox_margin must be positive.")
+
+    n_parts = len(final_parts)
+
+    if n_parts == 0:
+        raise ValueError("No boundary parts provided.")
+
+    nlay = final_heads.shape[1]
+    n_interfaces = nlay - 1
+
+    output_dir = Path(output_dir)
+
+    if not dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # -------------------------------------------------------
+    # 2. Helper functions
+    # -------------------------------------------------------
+    def format_bbox(xy):
+
+        xmin, ymin = xy.min(axis=0) - bbox_margin
+        xmax, ymax = xy.max(axis=0) + bbox_margin
+
+        return (
+            f"{xmin:.10f} {ymin:.10f}\n"
+            f"{xmax:.10f} {ymax:.10f}\n"
+        )
+
+    def write_file(path, text):
+
+        if dry_run:
+            print(path.name)
+        else:
+            path.write_text(text, encoding="utf-8")
+
+    # -------------------------------------------------------
+    # 3. Global Dirichlet file
+    # -------------------------------------------------------
+    dirichlet_file = (
+        output_dir / f"{model_name}_dirichlet.dat"
+    )
+
+    global_entries = []
+    total_nodes = 0
+
+    # -------------------------------------------------------
+    # 4. Loop over reconstructed parts
+    # -------------------------------------------------------
+    for ipart, part in enumerate(final_parts, start=1):
+
+        nodes = part["nodes"]
+
+        n_points = len(nodes)
+
+        if n_points < 2:
+            raise ValueError(
+                f"Part {ipart} has fewer than 2 nodes."
+            )
+
+        # Preserve reconstructed node ordering
+        row_ids = nodes["row_id"].to_numpy(dtype=int)
+
+        xy = nodes[["X", "Y"]].to_numpy(dtype=float)
+
+        if not np.isfinite(xy).all():
+            raise ValueError(
+                f"Part {ipart} contains invalid coordinates."
+            )
+
+        if np.any(row_ids < 0) or np.any(
+            row_ids >= final_heads.shape[0]
+        ):
+            raise ValueError(
+                f"Part {ipart} contains invalid row_id."
+            )
+
+        if len(np.unique(row_ids)) != n_points:
+            raise ValueError(
+                f"Part {ipart} contains duplicate row_id."
+            )
+
+        # Extract corresponding data
+        heads = final_heads[row_ids, :]
+        elev = final_elev[row_ids, :]
+
+        # Check interface ordering:
+        # BOT_L1 >= BOT_L2 >= BOT_L3
+        invalid_elev = np.any(
+            np.diff(elev, axis=1) > 1e-6,
+            axis=1
+        )
+
+        if np.any(invalid_elev):
+            raise ValueError(
+                f"Part {ipart}: "
+                f"{invalid_elev.sum()} nodes have "
+                "incorrect vertical interface ordering."
+            )
+
+        # Check consecutive coordinates
+        segment_lengths = np.linalg.norm(
+            np.diff(xy, axis=0),
+            axis=1
+        )
+
+        if np.any(segment_lengths <= 1e-8):
+            raise ValueError(
+                f"Part {ipart} contains zero-length segments."
+            )
+
+        # ---------------------------------------------------
+        # Filenames
+        # ---------------------------------------------------
+        part_name = (
+            f"{model_name}_BND_"
+            f"{n_parts:03d}_{ipart:03d}"
+        )
+
+        master_name = f"{part_name}_master.dat"
+        pline_name = f"{part_name}_pline.dat"
+        head_name = f"{part_name}_head_values.dat"
+
+        master_file = output_dir / master_name
+        pline_file = output_dir / pline_name
+        head_file = output_dir / head_name
+
+        bbox = format_bbox(xy)
+
+        # ---------------------------------------------------
+        # A. Write master file
+        # ---------------------------------------------------
+        master_text = (
+            "1\n"
+            f"2 LATERAL_POLYLINE "
+            f"{pline_name} {head_name}\n"
+            f"{bbox}"
+        )
+
+        write_file(master_file, master_text)
+
+        # ---------------------------------------------------
+        # B. Write polyline geometry and elevations
+        # ---------------------------------------------------
+        pline_lines = [
+            f"{n_points} {nlay}",
+            f"{horizontal_interp} {vertical_interp}",
+        ]
+
+        # XY coordinates
+        for x, y in xy:
+            pline_lines.append(
+                f"{x:.10f} {y:.10f}"
+            )
+
+        # IDs and interlayer elevations
+        #
+        # Layout:
+        # IDs_L1
+        # BOT_L1
+        # IDs_L2
+        # BOT_L2
+        # IDs_L3
+        # BOT_L3
+        # IDs_L4
+
+        for ilay in range(nlay):
+
+            # Local row IDs into this part's head-values file
+            ids = np.arange(
+                ilay * n_points,
+                (ilay + 1) * n_points,
+                dtype=int
+            )
+
+            pline_lines.append(
+                " ".join(str(v) for v in ids)
+            )
+
+            if ilay < n_interfaces:
+
+                pline_lines.append(
+                    " ".join(
+                        f"{z:.10f}"
+                        for z in elev[:, ilay]
+                    )
+                )
+
+        pline_text = "\n".join(pline_lines) + "\n"
+
+        write_file(pline_file, pline_text)
+
+        # ---------------------------------------------------
+        # C. Write steady-state head values
+        # ---------------------------------------------------
+        # Layer-major ordering:
+        #
+        # L1: nodes 0 ... n-1
+        # L2: nodes 0 ... n-1
+        # L3: nodes 0 ... n-1
+        # L4: nodes 0 ... n-1
+        #
+        # One column, no header.
+
+        head_values = heads.T.reshape(-1)
+
+        head_text = "".join(
+            f"{h:.10f}\n"
+            for h in head_values
+        )
+
+        write_file(head_file, head_text)
+
+        # ---------------------------------------------------
+        # D. Add entry to global Dirichlet file
+        # ---------------------------------------------------
+        global_entries.append(
+            f"EDGE 2 {master_name}\n"
+            f"{bbox}"
+        )
+
+        total_nodes += n_points
+
+        # ---------------------------------------------------
+        # E. Validate written files
+        # ---------------------------------------------------
+        if validate and not dry_run:
+
+            # Validate geometry file using the exact
+            # token consumption pattern of the C++ reader.
+            tokens = pline_file.read_text(
+                encoding="utf-8"
+            ).split()
+
+            pos = 0
+
+            def take(n):
+                nonlocal pos
+
+                values = tokens[pos:pos + n]
+
+                if len(values) != n:
+                    raise ValueError(
+                        f"Unexpected EOF in {pline_name}."
+                    )
+
+                pos += n
+                return values
+
+            np_file, nl_file = map(int, take(2))
+
+            assert np_file == n_points
+            assert nl_file == nlay
+
+            hor, ver = take(2)
+
+            assert hor == horizontal_interp
+            assert ver == vertical_interp
+
+            xy_read = np.asarray(
+                take(2 * n_points),
+                dtype=float
+            ).reshape(n_points, 2)
+
+            assert np.allclose(
+                xy_read, xy,
+                atol=1e-8,
+                rtol=0
+            )
+
+            for ilay in range(nlay):
+
+                ids_read = np.asarray(
+                    take(n_points),
+                    dtype=int
+                )
+
+                expected_ids = np.arange(
+                    ilay * n_points,
+                    (ilay + 1) * n_points
+                )
+
+                assert np.array_equal(
+                    ids_read, expected_ids
+                )
+
+                if ilay < n_interfaces:
+
+                    z_read = np.asarray(
+                        take(n_points),
+                        dtype=float
+                    )
+
+                    assert np.allclose(
+                        z_read,
+                        elev[:, ilay],
+                        atol=1e-8,
+                        rtol=0
+                    )
+
+            # Ensure no unexpected extra values
+            if pos != len(tokens):
+                raise ValueError(
+                    f"Unexpected extra values in {pline_name}."
+                )
+
+            # Validate head-values file
+            h_read = np.loadtxt(
+                head_file,
+                dtype=float,
+                ndmin=2
+            )
+
+            if h_read.shape != (n_points * nlay, 1):
+                raise ValueError(
+                    f"Invalid head array shape in {head_name}: "
+                    f"{h_read.shape}"
+                )
+
+            if not np.allclose(
+                h_read[:, 0],
+                head_values,
+                atol=1e-8,
+                rtol=0
+            ):
+                raise ValueError(
+                    f"Head values mismatch in {head_name}."
+                )
+
+    # -------------------------------------------------------
+    # 5. Write main Dirichlet file
+    # -------------------------------------------------------
+    global_text = (
+        f"{n_parts}\n"
+        + "".join(global_entries)
+    )
+
+    write_file(dirichlet_file, global_text)
+
+    # -------------------------------------------------------
+    # 6. Summary
+    # -------------------------------------------------------
+    print("\nNPSAT Dirichlet BC files")
+    print("-" * 45)
+    print(f"Boundary parts       : {n_parts}")
+    print(f"Polyline nodes       : {total_nodes}")
+    print(f"Vertical layers      : {nlay}")
+    print(f"Head values          : {total_nodes * nlay}")
+    print(f"Total files          : {1 + 3 * n_parts}")
+    print(f"Horizontal interp.   : {horizontal_interp}")
+    print(f"Vertical interp.     : {vertical_interp}")
+    print(f"Output directory     : {output_dir}")
+    print(f"Validation           : {validate}")
+    print("-" * 45)
+
+    return dirichlet_file
+
