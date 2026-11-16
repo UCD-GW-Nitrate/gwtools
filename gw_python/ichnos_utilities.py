@@ -1,3 +1,4 @@
+from pathlib import Path
 import warnings
 import geopandas as gpd
 import numpy as np
@@ -10,6 +11,9 @@ import subprocess
 import shlex
 import time
 from typing import Dict, Any, List, Tuple, Union
+from scipy.spatial import cKDTree
+from shapely.geometry import Polygon
+from math import isfinite
 
 def outline_mesh_to_domain_file(gdf, filename):
     if len(gdf) == 0:
@@ -539,6 +543,324 @@ def read_ichnos_elev(filename: str) -> Dict[str, Any]:
         raise
 
     return Elev
+
+
+def _prepare_ichnos_mesh(xy, mesh):
+    """Validate the mesh and normalize connectivity to four CCW columns."""
+    xy = np.asarray(xy, dtype=float)
+    mesh = np.asarray(mesh)
+
+    if xy.ndim != 2 or xy.shape[1] != 2 or not np.isfinite(xy).all():
+        raise ValueError("xy must contain finite coordinates with shape (n_nodes, 2)")
+
+    if mesh.ndim != 2 or mesh.shape[1] not in (3, 4) or len(mesh) == 0:
+        raise ValueError("mesh must have shape (n_elements, 3) or (n_elements, 4)")
+
+    if not np.issubdtype(mesh.dtype, np.integer):
+        raise ValueError("mesh must contain integer node indices")
+
+    if np.any(mesh[:, :3] < 0) or np.any(mesh >= len(xy)):
+        raise ValueError("mesh contains an out-of-range node index")
+    if mesh.shape[1] == 4 and np.any(mesh[:, 3] < -1):
+        raise ValueError("use -1 in the fourth column to mark triangles")
+
+    conn = np.full((len(mesh), 4), -1, dtype=np.int64)
+    conn[:, :mesh.shape[1]] = mesh
+
+    for n_vertices, mask in ((3, conn[:, 3] == -1), (4, conn[:, 3] >= 0)):
+        ids = conn[mask, :n_vertices]
+        if np.any(np.diff(np.sort(ids, axis=1), axis=1) == 0):
+            raise ValueError("an element repeats a node index")
+
+        vertices = xy[ids]
+        # Shift before computing signed area to reduce cancellation.
+        local = vertices - vertices[:, :1, :]
+        x = local[:, :, 0]
+        y = local[:, :, 1]
+        area2 = np.sum(
+            x * np.roll(y, -1, axis=1) - y * np.roll(x, -1, axis=1),
+            axis=1,
+        )
+        if np.any(area2 == 0):
+            raise ValueError("mesh contains a zero-area element")
+
+        clockwise = area2 < 0
+        # Keep the first vertex and reverse the remaining vertices.
+        ids[clockwise, 1:] = ids[clockwise, 1:][:, ::-1]
+        conn[mask, :n_vertices] = ids
+
+    return xy, conn
+
+
+def _ichnos_radius_table(xy, conn, n_neighbors, cover_elements):
+    if (
+        isinstance(n_neighbors, (bool, np.bool_))
+        or not isinstance(n_neighbors, (int, np.integer))
+        or not 1 <= n_neighbors <= len(conn)
+    ):
+        raise ValueError("n_neighbors must be an integer from 1 to n_elements")
+
+    n_points = np.arange(1, n_neighbors + 1)
+    is_quad = conn[:, 3] >= 0
+
+    vertex_ids = conn.copy()
+    vertex_ids[~is_quad, 3] = conn[~is_quad, 0]
+    vertices = xy[vertex_ids]
+
+    barycenters = vertices[:, :3].mean(axis=1)
+    barycenters[is_quad] = vertices[is_quad].mean(axis=1)
+
+    tree = cKDTree(barycenters)
+    distances, neighbor_ids = tree.query(barycenters, k=n_points.tolist())
+    required = distances.max(axis=0)
+
+    if cover_elements:
+        required = np.zeros(n_neighbors, dtype=float)
+        for element_vertices, ids in zip(vertices, neighbor_ids):
+            offsets = element_vertices[:, None, :] - barycenters[ids]
+            farthest = np.hypot(offsets[..., 0], offsets[..., 1]).max(axis=0)
+            required = np.maximum(required, np.maximum.accumulate(farthest))
+
+    return pd.DataFrame({"n_points": n_points, "_dist": required})
+
+
+def ichnos_mesh2d_search_radius(
+    xy, mesh, n_neighbors=3, *, cover_elements=False
+):
+    """Return search distances for finding 1 through n_neighbors barycenters."""
+    xy, conn = _prepare_ichnos_mesh(xy, mesh)
+    return _ichnos_radius_table(xy, conn, n_neighbors, cover_elements)
+
+
+def write_ichnos_elev_MESH2D(
+    filename, xy, mesh, elev, radius=None, *, n_neighbors=3
+):
+    """Write one elevation surface or combined top and bottom surfaces."""
+    xy, conn = _prepare_ichnos_mesh(xy, mesh)
+
+    elev = np.asarray(elev, dtype=float)
+    if elev.ndim == 1:
+        elev = elev[:, None]
+
+    if elev.shape not in ((len(xy), 1), (len(xy), 2)):
+        raise ValueError("elev must have one or two columns and one row per node")
+    if not np.isfinite(elev).all():
+        raise ValueError("elev must contain finite values")
+
+    if radius is None:
+        radius_table = _ichnos_radius_table(
+            xy, conn, n_neighbors, cover_elements=True
+        )
+        radius = float(np.nextafter(radius_table["_dist"].iloc[-1], np.inf))
+    else:
+        radius = float(radius)
+        if not np.isfinite(radius) or radius <= 0:
+            raise ValueError("radius must be finite and positive")
+
+    # Zero-based node indices become one-based. Triangle padding becomes 0.
+    with Path(filename).expanduser().open("w", encoding="utf-8") as stream:
+        stream.write("MESH2D\n")
+        stream.write(f"{len(xy)} {len(conn)} {radius:.17g}\n")
+        np.savetxt(stream, np.column_stack((xy, elev)), fmt="%.17g")
+        np.savetxt(stream, conn + 1, fmt="%d")
+
+    return radius
+
+
+def write_ichnos_wells(filename, Eid, XY, T, B, RT=None, randomize=False,*, header=None):
+    """Write an ICHNOS particle-release well file."""
+    settings = {"npart": 100, "nlay": 25, "rad": 10.5}
+    if header is not None:
+        unknown = header.keys() - settings.keys()
+        if unknown:
+            raise ValueError(f"Unknown header keys: {sorted(unknown)}")
+        settings.update(header)
+
+    ids = np.asarray(Eid)
+    if ids.ndim != 1:
+        raise ValueError("Eid must be a one-dimensional array")
+
+    ids = pd.to_numeric(pd.Series(ids), errors="raise")
+    if ids.isna().any() or not np.isfinite(ids).all() or (ids % 1 != 0).any():
+        raise ValueError("Eid must contain finite integer IDs")
+    if ids.duplicated().any():
+        raise ValueError("Eid must be unique for each well")
+
+    n_wells = len(ids)
+    xy = np.asarray(XY, dtype=float)
+    top = np.asarray(T, dtype=float)
+    bottom = np.asarray(B, dtype=float)
+
+    if xy.shape != (n_wells, 2):
+        raise ValueError("XY must have shape (n_wells, 2)")
+    if top.shape != (n_wells,) or bottom.shape != (n_wells,):
+        raise ValueError("T and B must each contain one elevation per well")
+
+    release_time = np.asarray(0.0 if RT is None else RT, dtype=float)
+    if release_time.ndim == 0:
+        release_time = np.full(n_wells, release_time.item())
+    if release_time.shape != (n_wells,):
+        raise ValueError("RT must be a scalar or contain one value per well")
+
+    values = np.column_stack((xy, top, bottom, release_time))
+    if not np.isfinite(values).all():
+        raise ValueError("XY, T, B, and RT must contain finite values")
+
+    order = np.arange(n_wells)
+    if randomize:
+        np.random.default_rng().shuffle(order)
+
+    with Path(filename).expanduser().open("w", encoding="utf-8") as f:
+        f.write("100 25 10.500\n")
+        for i in order:
+            x, y, t, b, rt = values[i]
+            f.write(f"{int(ids.iat[i])} {x:.3f} {y:.3f} {t:.3f} {b:.3f} {rt:.3f}\n")
+
+
+def read_ichnos_outline(filename, crs=None):
+    """Read ICHNOS outline polygons into a GeoDataFrame."""
+    path = Path(filename).expanduser()
+    records = []
+
+    with path.open(encoding="utf-8-sig") as stream:
+        # Skip blank lines between or within polygon blocks.
+        lines = (
+            (line_no, line.split())
+            for line_no, line in enumerate(stream, start=1)
+            if line.strip()
+        )
+
+        for header_line, fields in lines:
+            try:
+                n_vertices, inout = map(int, fields)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{path}:{header_line}: expected 'n_vertices INOUT'"
+                ) from exc
+
+            if n_vertices < 3 or inout not in (0, 1):
+                raise ValueError(
+                    f"{path}:{header_line}: expected at least three vertices "
+                    "and INOUT equal to 0 or 1"
+                )
+
+            xy = np.empty((n_vertices, 2), dtype=float)
+            for i in range(n_vertices):
+                row = next(lines, None)
+                if row is None:
+                    raise ValueError(
+                        f"{path}:{header_line}: expected {n_vertices} vertices, "
+                        f"found {i} before end of file"
+                    )
+
+                line_no, fields = row
+                try:
+                    x, y = map(float, fields)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{path}:{line_no}: expected two coordinates, X Y"
+                    ) from exc
+                if not np.isfinite([x, y]).all():
+                    raise ValueError(f"{path}:{line_no}: coordinates must be finite")
+                xy[i] = x, y
+
+            polygon = Polygon(xy)
+            if not polygon.is_valid or polygon.area == 0:
+                raise ValueError(
+                    f"{path}:{header_line}: invalid or zero-area polygon"
+                )
+
+            records.append(
+                {"INOUT": inout, "n_vertices": n_vertices, "geometry": polygon}
+            )
+
+    return gpd.GeoDataFrame(
+        records,
+        columns=["INOUT", "n_vertices", "geometry"],
+        geometry="geometry",
+        crs=crs,
+    )
+
+def read_ichnos_processor_polys(filename, crs=None):
+    """Read an ICHNOS ProcessorPolys or ExpandedPolys file."""
+    path = Path(filename).expanduser()
+    records = []
+    seen_ids = set()
+
+    with path.open(encoding="utf-8-sig") as stream:
+        lines = (
+            (line_no, line.split())
+            for line_no, line in enumerate(stream, start=1)
+            if line.strip()
+        )
+
+        first = next(lines, None)
+        if first is None:
+            raise ValueError(f"{path}: missing Nproc header")
+
+        line_no, fields = first
+        try:
+            nproc, = map(int, fields)
+        except ValueError as exc:
+            raise ValueError(f"{path}:{line_no}: expected one integer for Nproc") from exc
+
+        if nproc < 1:
+            raise ValueError(f"{path}:{line_no}: Nproc must be positive")
+
+        for _ in range(nproc):
+            header = next(lines, None)
+            if header is None:
+                raise ValueError(
+                    f"{path}: expected {nproc} polygons, found {len(records)}"
+                )
+
+            header_line, fields = header
+            try:
+                proc_id, n_vertices = map(int, fields)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{header_line}: expected 'ID n_vertices'") from exc
+
+            if not 0 <= proc_id < nproc or proc_id in seen_ids:
+                raise ValueError(
+                    f"{path}:{header_line}: duplicate or out-of-range ID {proc_id}"
+                )
+            if n_vertices < 3:
+                raise ValueError(f"{path}:{header_line}: expected at least three vertices")
+
+            xy = []
+            for _ in range(n_vertices):
+                row = next(lines, None)
+                if row is None:
+                    raise ValueError(
+                        f"{path}:{header_line}: processor {proc_id} declares "
+                        f"{n_vertices} vertices, found {len(xy)} before end of file"
+                    )
+
+                line_no, fields = row
+                try:
+                    x, y = map(float, fields)
+                except ValueError as exc:
+                    raise ValueError(f"{path}:{line_no}: expected 'X Y'") from exc
+
+                if not (isfinite(x) and isfinite(y)):
+                    raise ValueError(f"{path}:{line_no}: coordinates must be finite")
+                xy.append((x, y))
+
+            polygon = Polygon(xy)
+            if not polygon.is_valid or polygon.area == 0:
+                raise ValueError(f"{path}:{header_line}: invalid polygon for ID {proc_id}")
+
+            seen_ids.add(proc_id)
+            records.append(
+                {"ID": proc_id, "n_vertices": n_vertices, "geometry": polygon}
+            )
+
+        extra = next(lines, None)
+        if extra is not None:
+            raise ValueError(f"{path}:{extra[0]}: extra data after {nproc} polygons")
+
+    return gpd.GeoDataFrame(records, geometry="geometry", crs=crs)
+
 
 
 

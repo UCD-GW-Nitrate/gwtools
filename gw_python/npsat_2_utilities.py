@@ -2199,3 +2199,48 @@ def write_npsat_dirichlet_parts(
 
     return dirichlet_file
 
+
+def read_scatter_interpolant(tri_file, data_file):
+    """Read NPSAT scattered interpolation geometry and values."""
+    tri_file = Path(tri_file).expanduser()
+    data_file = Path(data_file).expanduser()
+
+    with tri_file.open(encoding="utf-8") as stream:
+        n_nodes, n_tri = map(int, stream.readline().split())
+        hor_type, ver_type = stream.readline().split()
+
+        if n_nodes < 0 or n_tri < 0:
+            raise ValueError(f"{tri_file}: node and triangle counts must be nonnegative")
+
+        node_rows = [stream.readline().split() for _ in range(n_nodes)]
+        tri_rows = [stream.readline().split() for _ in range(n_tri)]
+
+    # Node layouts are X Y and X Y ID [ELEV ID ...].
+    n_cols = len(node_rows[0]) if node_rows else 2
+    if n_cols != 2 and (n_cols < 3 or n_cols % 2 == 0):
+        raise ValueError(f"{tri_file}: invalid node column layout")
+    if any(len(row) != n_cols for row in node_rows):
+        raise ValueError(f"{tri_file}: inconsistent or missing node rows")
+    if any(len(row) != 3 for row in tri_rows):
+        raise ValueError(f"{tri_file}: expected three indices per triangle")
+
+    node_xy = np.array([row[:2] for row in node_rows], dtype=float).reshape(-1, 2)
+    tri = np.array(tri_rows, dtype=np.int64).reshape(-1, 3)
+
+    ids = None
+    elev = None
+    if n_cols >= 3:
+        ids = np.array([row[2::2] for row in node_rows], dtype=np.int64)
+    if n_cols >= 5:
+        elev = np.array([row[3::2] for row in node_rows], dtype=float)
+
+    return {
+        "node_xy": node_xy,
+        "tri": tri,
+        "IDs": ids,
+        "ELEV": elev,
+        "HOR_type": hor_type,
+        "VER_type": ver_type,
+        "data": np.loadtxt(data_file, dtype=float, ndmin=2),
+    }
+
