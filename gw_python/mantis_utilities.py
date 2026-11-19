@@ -7,6 +7,12 @@ from scipy.stats import lognorm
 from tqdm import tqdm
 
 def mantis_inputs():
+    """Return client settings and selectable Scenario.h inputs.
+
+    Optional values of None leave the server defaults in effect. Scenario/map
+    names must exist in the server configuration. Existing example selections
+    are retained for compatibility.
+    """
 
     scenario = {
         # -----------------
@@ -45,13 +51,19 @@ def mantis_inputs():
         'maxConc' : None, #250;
         'maxAge' : None, #400;
         'constRed' : None, #1.0;
+        # Removal applies where the map value exceeds the threshold.
+        # Set all three options to enable; denitMap=None disables denitrification.
+        'denitMap' : None, # Configured map name, not a filename.
+        'denitThreshold' : None, # 0..1
+        'denitFractionRemoved' : None, # 0..1 (0.30 removes 30%).
         'LoadTransitionName' : None, #'NONE';
-        'LoadTransitionStart' : None, #2035;
-        'LoadTransitionEnd' : None, #2025;
+        'LoadTransitionStart' : None, #2005;
+        'LoadTransitionEnd' : None, #2015;
+        'LoadTransitionSubScen' : None, # Named historic RASTER loading subset.
         'startSimYear' : None, #1945;
         'por' : None, #10;
         'urfType' : None, #'LGNRM' or 'ADE';
-        'ADELR' : None,
+        'ADELR' : None, # [lambda, retardation]
         'initConcParam' : None, #mean std min max
         'surfConc' : None, # 0
         'surfRivDist' : None, # 50
@@ -74,14 +86,15 @@ def mantis_inputs():
         # -----------------
         'loadSubScen' : None,
         'modifierName' : None,
-        'modifierType' : None,
-        'modifierUnit' : None,
+        'modifierType' : None, # 'Multiply' or 'Replace'
+        'modifierUnit' : None, # 'CONC' or 'MASS'
 
         # -----------------
         # Misc Options
         # -----------------
         'getids' : None,
         'getOtherInfo' : None,
+        'getotherinfo' : None, # Server spelling; overrides getOtherInfo if set.
         'DebugID' : None,
         'printLF' : None,
         'printURF' : None,
@@ -94,12 +107,20 @@ def mantis_inputs():
     return scenario
 
 
-def run_mantis(scenario):
+def run_mantis(scenario, return_metadata=False):
+    """Run the client and return (btc, success).
+
+    With return_metadata=True, return (btc, well_info, success), separating
+    metadata according to the scenario's getids and getOtherInfo settings.
+    The default preserves the legacy array, including any metadata columns.
+    """
     btc = []
     tf = 0
     if scenario['client'] is None:
         msg = "No client was specified. Returning empty lists."
         print(f"\033[93mWARNING:\033[0m {msg}")  # 93 = yellow
+        if return_metadata:
+            return np.empty((0, 0)), None, False
         return btc, tf
 
     # Delete the output file if it already exists
@@ -114,11 +135,48 @@ def run_mantis(scenario):
     with open(os.devnull, 'w') as null:
         subprocess.call(cmd, stdout=null, stderr=null)
 
-    btc, tf = read_mantis_output(scenario["outfile"])
-
-    return btc, tf
+    other_info = scenario.get("getotherinfo")
+    if other_info is None:
+        other_info = scenario.get("getOtherInfo")
+    return read_mantis_output(
+        scenario["outfile"],
+        getids=bool(scenario.get("getids")),
+        getOtherInfo=bool(other_info),
+        return_metadata=return_metadata,
+    )
 
 def write_mantis_input(scenario: dict):
+    """Write client input using Scenario.h option names without mutating scenario.
+
+    Set denitMap, denitThreshold, and
+    denitFractionRemoved together. These serialize to the server's
+    single denit option. Setting denitMap=None disables denitrification,
+    ignoring retained threshold/fraction values and any legacy denit list.
+    The legacy denit list [map, threshold, fraction] is accepted only when
+    the denitMap key is absent.
+    The historic raster
+    subset uses LoadTransitionSubScen (loadTransitionSubScen is also accepted).
+    Boolean output flags are serialized as integers for the C++ parser.
+    """
+    denit = scenario.get("denit")
+    if "denitMap" in scenario:
+        denit = None
+        if scenario["denitMap"] is not None:
+            denit = [scenario.get(key) for key in (
+                "denitMap", "denitThreshold", "denitFractionRemoved",
+            )]
+            if any(value is None for value in denit):
+                raise ValueError(
+                    "Set denitThreshold and denitFractionRemoved when denitMap is enabled."
+                )
+    if denit is not None:
+        if isinstance(denit, (str, bytes)) or len(denit) != 3:
+            raise ValueError("denit must contain [map_name, threshold, fraction_removed]")
+        if not isinstance(denit[0], str) or not denit[0] or any(c.isspace() for c in denit[0]):
+            raise ValueError("denit map_name must be a nonempty name without whitespace")
+        if not all(0 <= float(value) <= 1 for value in denit[1:]):
+            raise ValueError("denit threshold and fraction_removed must be between 0 and 1")
+
     with open(scenario["infile"], "w") as f:
 
         # Description comments
@@ -137,7 +195,7 @@ def write_mantis_input(scenario: dict):
         f.write(f"flowScen {scenario['flowScen']}\n")
         f.write(f"wellType {scenario['wellType']}\n")
         f.write(f"unsatScen {scenario['unsatScen']}\n")
-        f.write(f"unsatWC {scenario['unsatWC']:.2f}\n")
+        f.write(f"unsatWC {scenario['unsatWC']}\n")
         f.write(f"endSimYear {scenario['endSimYear']}\n")
 
         # -----------------
@@ -146,10 +204,11 @@ def write_mantis_input(scenario: dict):
         f.write(f"loadScen {scenario['loadScen']}\n")
         f.write(f"startRed {scenario['startRed']}\n")
         f.write(f"endRed {scenario['endRed']}\n")
-        if not scenario.get("Crops"):
-            scenario["Crops"] = [[-9, 1]]
-        f.write(f"Ncrops {len(scenario['Crops'])}\n")
-        for row in scenario["Crops"]:
+        crops = scenario.get("Crops")
+        if crops is None or len(crops) == 0:
+            crops = [[-9, 1]]
+        f.write(f"Ncrops {len(crops)}\n")
+        for row in crops:
             f.write(f"{row[0]} {row[1]:.3f}\n")
 
         # -----------------
@@ -166,12 +225,15 @@ def write_mantis_input(scenario: dict):
         if scenario.get("constRed") is not None:
             f.write(f"constRed {scenario['constRed']:.3f}\n")
         if scenario.get("LoadTransitionName"):
-            if not scenario.get("LoadTransitionStart") or not scenario.get("LoadTransitionEnd"):
-                scenario["LoadTransitionStart"] = 2005
-                scenario["LoadTransitionEnd"] = 2015
+            transition_start = scenario.get("LoadTransitionStart")
+            transition_end = scenario.get("LoadTransitionEnd")
+            if transition_start is None:
+                transition_start = 2005
+            if transition_end is None:
+                transition_end = 2015
             f.write(
                 f"loadTrans {scenario['LoadTransitionName']} "
-                f"{scenario['LoadTransitionStart']} {scenario['LoadTransitionEnd']}\n"
+                f"{transition_start} {transition_end}\n"
             )
         else:
             f.write(
@@ -179,9 +241,17 @@ def write_mantis_input(scenario: dict):
                 f"{0} {0}\n"
             )
 
-        if scenario.get("startSimYear"):
+        if denit is not None:
+            f.write(f"denit {denit[0]} {float(denit[1])} {float(denit[2])}\n")
+        transition_subset = scenario.get("LoadTransitionSubScen")
+        if transition_subset is None:
+            transition_subset = scenario.get("loadTransitionSubScen")
+        if transition_subset:
+            f.write(f"LoadTransitionSubScen {transition_subset}\n")
+
+        if scenario.get("startSimYear") is not None:
             f.write(f"startSimYear {scenario['startSimYear']}\n")
-        if scenario.get("por"):
+        if scenario.get("por") is not None:
             f.write(f"por {scenario['por']}\n")
         if scenario.get("urfType"):
             f.write(f"urfType {scenario['urfType']}\n")
@@ -232,36 +302,49 @@ def write_mantis_input(scenario: dict):
         # -----------------
         # Misc Options
         # -----------------
-        if scenario.get("getids"):
-            if scenario["getids"] != 0:
-                f.write("getids 1\n")
-                if scenario.get("getOtherInfo") and scenario["getOtherInfo"] != 0:
-                    f.write("getotherinfo 1\n")
+        if scenario.get("getids") is not None:
+            f.write(f"getids {int(bool(scenario['getids']))}\n")
+        other_info = scenario.get("getotherinfo")
+        if other_info is None:
+            other_info = scenario.get("getOtherInfo")
+        if other_info is not None:
+            f.write(f"getotherinfo {int(bool(other_info))}\n")
 
         if scenario.get("DebugID"):
             f.write(f"DebugID {scenario['DebugID']}\n")
-            if scenario.get("printLF"):
-                f.write(f"printLF {scenario['printLF']}\n")
-            if scenario.get("printURF"):
-                f.write(f"printURF {scenario['printURF']}\n")
-            if scenario.get("printBTC"):
-                f.write(f"printBTC {scenario['printBTC']}\n")
-            if scenario.get("printWellBTC"):
-                f.write(f"printWellBTC {scenario['printWellBTC']}\n")
+        for key in ("printLF", "printURF", "printBTC", "printWellBTC"):
+            if scenario.get(key) is not None:
+                f.write(f"{key} {int(bool(scenario[key]))}\n")
 
-        if scenario.get("PixelRadius"):
+        if scenario.get("PixelRadius") is not None:
             f.write(f"PixelRadius {scenario['PixelRadius']}\n")
-        if scenario.get("maxSourceCells"):
+        if scenario.get("maxSourceCells") is not None:
             f.write(f"maxSourceCells {scenario['maxSourceCells']}\n")
 
 
-def read_mantis_output(filename):
+def read_mantis_output(filename, *, getids=False, getOtherInfo=False,
+                       return_metadata=False):
+    """Read a Mantis client output file.
+
+    By default return (data, success), preserving all columns for existing
+    callers. With return_metadata=True return (btc, well_info, success): btc
+    contains only concentrations and well_info is a pandas DataFrame with
+    matching row order and integer columns well_id, count_rivers, count_max_age
+    (the counts are included only with getOtherInfo). Without getids,
+    well_info is None and getOtherInfo has no effect, matching the server.
+
+    Pass the same flags used to generate the file; the header reports total
+    columns and cannot distinguish metadata from simulation years. For an
+    empty result, metadata mode returns an empty 2D array, None, and False.
+    """
     with open(filename, "r") as f:
         # first line: Nbtc and Nyrs
         first_line = f.readline().split()
         Nbtc, Nyrs = int(first_line[0]), int(first_line[1])
 
         if Nbtc == 0:
+            if return_metadata:
+                return np.empty((0, 0)), None, False
             return np.array([]), False
 
         # read remaining numbers
@@ -269,6 +352,24 @@ def read_mantis_output(filename):
 
         # reshape to Nyrs x Nbtc then transpose -> Nbtc x Nyrs
         btc = data.reshape((Nbtc,Nyrs))
+
+        if return_metadata:
+            well_info = None
+            if getids:
+                import pandas as pd
+
+                columns = ["well_id"]
+                if getOtherInfo:
+                    columns += ["count_rivers", "count_max_age"]
+                n_metadata = len(columns)
+                if Nyrs < n_metadata:
+                    raise ValueError("Output has fewer columns than the requested metadata")
+                metadata = btc[:, :n_metadata]
+                if not np.all(np.isfinite(metadata) & (metadata == np.floor(metadata))):
+                    raise ValueError("Well IDs and streamline counts must be finite integers")
+                well_info = pd.DataFrame(metadata.astype(np.int64), columns=columns)
+                btc = btc[:, n_metadata:]
+            return btc, well_info, True
 
         return btc, True
 
@@ -376,24 +477,39 @@ def calc_grid_row_col(P, gs: gridSpec):
 
     return P
 
-def write_linear_data(names, data, filename):
+def write_linear_data(names, data, filename, suppress_print=False):
+    """Write (cell, scenario) values in Mantis LinearData format.
+
+    HDF5 stores Data as (scenario, cell); ASCII stores one cell per line.
+    A one-dimensional input is accepted for a single named scenario.
+    Runtime loading requires HDF5 with exactly one scenario and values in
+    the server raster's active-cell order.
+    Set suppress_print=True to suppress the HDF5 success message.
+    """
     names = list(names)
     data = np.asarray(data)
 
     # Validate dimensions
     n = len(names)
+    if n == 0 or any(not isinstance(name, str) or not name for name in names) or len(set(names)) != n:
+        raise ValueError("names must contain unique, nonempty scenario names.")
+    if data.ndim == 1 and n == 1:
+        data = data.reshape(-1, 1)
+    if data.ndim != 2:
+        raise ValueError("data must have shape (cells, scenarios).")
     if data.shape[1] != n:
         raise ValueError(f"Data must have {n} columns, but has {data.shape[1]}.")
 
     # Check file extension
     ext = os.path.splitext(filename)[1].lower()
 
-    if ext == ".h5":
+    if ext in (".h5", ".hdf5"):
         # Save as HDF5
         with h5py.File(filename, "w") as f:
             f.create_dataset("Names", data=np.array(names, dtype=h5py.string_dtype()))
-            f.create_dataset("Data", data=data)
-        print(f"HDF5 file written: {filename}")
+            f.create_dataset("Data", data=data.T)
+        if not suppress_print:
+            print(f"HDF5 file written: {filename}")
     else:
         # Save as ASCII
         with open(filename, "w") as f:
@@ -404,13 +520,24 @@ def write_linear_data(names, data, filename):
         print(f"ASCII file written: {filename}")
 
 def read_linear_data(filename):
+    """Read names and (cell, scenario) values from a Mantis LinearData file.
+
+    HDF5 uses the server's (scenario, cell) layout. Legacy Python files with
+    (cell, scenario) layout are also accepted when the shape is unambiguous.
+    """
     ext = os.path.splitext(filename)[1].lower()
 
-    if ext == ".h5":
+    if ext in (".h5", ".hdf5"):
         # Read HDF5
         with h5py.File(filename, "r") as f:
-            names = [str(n) for n in f["Names"][()]]
+            names = list(f["Names"].asstr()[()])
             data = np.array(f["Data"])
+            if data.ndim != 2:
+                raise ValueError("HDF5 Data must be two-dimensional.")
+            if data.shape[0] == len(names):
+                data = data.T
+            elif data.shape[1] != len(names):
+                raise ValueError("HDF5 Data dimensions do not match Names.")
     else:
         # Read ASCII
         with open(filename, "r") as f:
@@ -419,7 +546,7 @@ def read_linear_data(filename):
             # Next n lines: names
             names = [f.readline().strip() for _ in range(n)]
             # Remaining: array
-            data = np.loadtxt(f)
+            data = np.loadtxt(f, ndmin=2)
 
         # Ensure shape consistency (convert to 2D even if 1 row)
         if data.ndim == 1:
@@ -428,14 +555,23 @@ def read_linear_data(filename):
     return names, data
 
 def read_raster(filename):
+    """Read raster indices as (N, 2), accepting either HDF5 orientation.
+
+    A (2, 2) HDF5 dataset is treated as already having two columns.
+    """
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".h5":
 
         with h5py.File(filename, "r") as f:
             if 'Raster' not in f:
                 raise KeyError("Dataset 'Raster' not found in HDF5 file.")
-            #data = f['Raster'][()]
-            data = np.array(f["Raster"]).T
+            data = np.array(f["Raster"])
+            if data.ndim != 2:
+                raise ValueError("HDF5 Raster dataset must be two-dimensional.")
+            if data.shape[1] != 2:
+                if data.shape[0] != 2:
+                    raise ValueError("HDF5 Raster dataset must have shape (N, 2) or (2, N).")
+                data = data.T
 
     else:
         data = np.loadtxt(filename)
@@ -445,16 +581,48 @@ def read_raster(filename):
     return data
 
 def linear_to_raster(linear_data, idx, nrow, ncol):
+    """Place (N,) or (N, 1) values at zero-based (N, 2) row/column indices.
+
+    Return a (nrow, ncol) array with NaN in cells not listed in idx.
+    Index pairs should be unique for a lossless round trip.
+    """
+    linear_data = np.asarray(linear_data)
+    idx = np.asarray(idx)
+    if linear_data.ndim == 2 and linear_data.shape[1] == 1:
+        linear_data = linear_data[:, 0]
+    if linear_data.ndim != 1:
+        raise ValueError("linear_data must have shape (N,) or (N, 1).")
+    if idx.ndim != 2 or idx.shape[1] != 2:
+        raise ValueError("idx must have shape (N, 2).")
+    if len(linear_data) != len(idx):
+        raise ValueError("linear_data and idx must have the same number of rows.")
+    if not np.issubdtype(idx.dtype, np.integer):
+        raise ValueError("idx must contain integer row/column indices.")
+    if np.any(idx < 0) or np.any(idx[:, 0] >= nrow) or np.any(idx[:, 1] >= ncol):
+        raise ValueError("idx contains indices outside the raster dimensions.")
     out = np.full((nrow, ncol), np.nan)
-    # Faster vectorized version
     out[idx[:, 0], idx[:, 1]] = linear_data
-
-    # # Assign values
-    # for i in range(linear_data.shape[0]):
-    #     r, c = idx[i]
-    #     out[r, c] = linear_data[i]
-
     return out
+
+def raster_to_linear(raster, idx):
+    """Extract raster values as (N,) in the order of the (N, 2) idx array.
+
+    idx contains zero-based [row, column] pairs, as in linear_to_raster.
+    Values (including negatives and NaNs) and their dtype are preserved.
+    Use raster_to_linear(raster, idx).reshape(-1, 1) for an (N, 1) result.
+    """
+    raster = np.asarray(raster)
+    idx = np.asarray(idx)
+    if raster.ndim != 2:
+        raise ValueError("raster must be a two-dimensional array.")
+    if idx.ndim != 2 or idx.shape[1] != 2:
+        raise ValueError("idx must have shape (N, 2).")
+    if not np.issubdtype(idx.dtype, np.integer):
+        raise ValueError("idx must contain integer row/column indices.")
+    if (np.any(idx < 0) or np.any(idx[:, 0] >= raster.shape[0])
+            or np.any(idx[:, 1] >= raster.shape[1])):
+        raise ValueError("idx contains indices outside the raster dimensions.")
+    return raster[idx[:, 0], idx[:, 1]]
 
 def convert_raster_to_column(raster):
     rows, cols = np.where(raster >= 0)
