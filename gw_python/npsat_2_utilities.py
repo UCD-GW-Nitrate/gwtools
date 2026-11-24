@@ -3,6 +3,7 @@ import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import csv
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -2244,3 +2245,115 @@ def read_scatter_interpolant(tri_file, data_file):
         "data": np.loadtxt(data_file, dtype=float, ndmin=2),
     }
 
+
+def read_wellboreflow_csv(filename):
+    """Read well summaries and their variable-length segment records."""
+    well_columns = ["well_id", "Eid", "Qtot", "n_segments", "F_top", "-Qtot", "diff"]
+    segment_columns = ["ze_0", "Qe_0", "Qwbf_0"]
+
+    well_records = []
+    segment_dfs = []
+
+    with open(filename, newline="", encoding="utf-8-sig") as file:
+        reader = csv.reader(file)
+        next(reader, None)  # Skip the header.
+
+        for row in reader:
+            line_number = reader.line_num
+            row = [value.strip() for value in row]
+            if not any(row):
+                continue
+
+            # Allow a trailing comma after the final value.
+            if row[-1] == "":
+                row.pop()
+
+            if len(row) < len(well_columns):
+                raise ValueError(f"Line {line_number}: incomplete well fields.")
+
+            well_id, eid, qtot, n_segments_text, f_top, neg_qtot, diff = row[:7]
+
+            try:
+                n_segments = int(n_segments_text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Line {line_number}: invalid n_segments {n_segments_text!r}."
+                ) from exc
+
+            if n_segments < 0:
+                raise ValueError(f"Line {line_number}: n_segments must be nonnegative.")
+
+            segment_values = row[7:]
+            expected = 3 * n_segments
+            if len(segment_values) != expected:
+                raise ValueError(
+                    f"Line {line_number}, well {well_id!r}: expected {expected} "
+                    f"segment values for {n_segments} segments, got {len(segment_values)}."
+                )
+
+            try:
+                well_record = (
+                    well_id,
+                    int(eid),
+                    float(qtot),
+                    n_segments,
+                    float(f_top),
+                    float(neg_qtot),
+                    float(diff),
+                )
+                segments = [
+                    tuple(float(value) for value in segment_values[i:i + 3])
+                    for i in range(0, expected, 3)
+                ]
+            except ValueError as exc:
+                raise ValueError(
+                    f"Line {line_number}, well {well_id!r}: invalid numeric value."
+                ) from exc
+
+            well_records.append(well_record)
+            segment_dfs.append(
+                pd.DataFrame(segments, columns=segment_columns, dtype=float)
+            )
+
+    well_df = pd.DataFrame(well_records, columns=well_columns)
+    return well_df, segment_dfs
+
+
+def read_transient_wellbore_flow(prefix, n_steps, n_ranks):
+    """Read NPSAT wellbore-flow output across steps and MPI ranks.
+
+    Step and rank numbering start at zero. The prefix can include a
+    directory, for example "outputs/test01_tr".
+    """
+    if n_steps < 0:
+        raise ValueError("n_steps must be nonnegative.")
+    if n_ranks < 1:
+        raise ValueError("n_ranks must be at least 1.")
+
+    steps = []
+
+    for step in range(n_steps):
+        rank_well_dfs = []
+        segment_dfs = []
+
+        for rank in range(n_ranks):
+            filename = Path(f"{prefix}_wellboreflow_rank_{rank:04d}_step_{step:03d}.csv")
+
+            if not filename.is_file():
+                raise FileNotFoundError(
+                    f"Missing wellbore-flow output for step {step}, "
+                    f"rank {rank}: {filename}"
+                )
+
+            rank_well_df, rank_segment_dfs = read_wellboreflow_csv(filename)
+
+            rank_well_dfs.append(rank_well_df.assign(rank=rank))
+            segment_dfs.extend(rank_segment_dfs)
+
+        steps.append({
+            "step": step,
+            "well_df": pd.concat(rank_well_dfs, ignore_index=True),
+            "segment_dfs": segment_dfs,
+        })
+
+    return steps
