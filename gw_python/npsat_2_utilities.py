@@ -2357,3 +2357,95 @@ def read_transient_wellbore_flow(prefix, n_steps, n_ranks):
         })
 
     return steps
+
+
+def detect_wbf(
+    streamlines,
+    wells,
+    *,
+    well_radius=20.0,
+    xy_tol=0.5,
+    min_dz=1.0,
+    max_xy_to_z=0.05,
+):
+    """Return Eid, Sid, wbf, and wbf_Eid using the input row order.
+
+    streamlines columns: Eid, Sid, x, y, z
+    wells columns: Eid, x, y, top, bottom
+    """
+    keys = ["Eid", "Sid"]
+    coords = ["x", "y", "z"]
+
+    points = streamlines[keys + coords].copy()
+    points[coords] = points[coords].astype(float)
+    wells = wells.sort_values("Eid", kind="stable").reset_index(drop=True)
+
+    end = points[coords].to_numpy()
+    start = points.groupby(keys, sort=False)[coords].shift().to_numpy()
+    dxy = np.hypot(end[:, 0] - start[:, 0], end[:, 1] - start[:, 1])
+    dz = np.abs(end[:, 2] - start[:, 2])
+    candidates = np.flatnonzero(
+        (dxy <= xy_tol) & (dz >= min_dz) & (dxy <= max_xy_to_z * dz)
+    )
+
+    a, b = start[candidates], end[candidates]
+    z_low = np.minimum(a[:, 2], b[:, 2])
+    z_high = np.maximum(a[:, 2], b[:, 2])
+    best_distance = np.full(len(candidates), np.inf)
+    best_well = np.full(len(candidates), -1, dtype=int)
+
+    geometry = wells[["x", "y", "top", "bottom"]].to_numpy(dtype=float)
+    for i, (wx, wy, top, bottom) in enumerate(geometry):
+        overlap = np.minimum(z_high, top) - np.maximum(z_low, bottom)
+        distance = np.maximum(
+            np.hypot(a[:, 0] - wx, a[:, 1] - wy),
+            np.hypot(b[:, 0] - wx, b[:, 1] - wy),
+        )
+        better = (
+            (overlap >= min_dz)
+            & (distance <= well_radius)
+            & (distance < best_distance)
+        )
+        best_distance[better] = distance[better]
+        best_well[better] = i
+
+    matched = best_well >= 0
+    matches = points.iloc[candidates[matched]][keys].reset_index(drop=True)
+    matches["wbf_Eid"] = (
+        wells["Eid"].iloc[best_well[matched]].reset_index(drop=True).convert_dtypes()
+    )
+    first_match = matches.drop_duplicates(keys, keep="first")
+
+    result = points[keys].drop_duplicates().merge(first_match, on=keys, how="left")
+    result["wbf"] = result["wbf_Eid"].notna()
+    return result[["Eid", "Sid", "wbf", "wbf_Eid"]]
+
+
+def wbf_flow_percentage(wbf_df, urf_df):
+    """Return one row per well in urf_df, with Eid and wbf_prc."""
+    keys = ["Eid", "Sid"]
+    df = urf_df[keys + ["v_cds"]].merge(
+        wbf_df[keys + ["wbf"]],
+        on=keys,
+        how="left",
+        validate="one_to_one",
+    )
+
+    has_wbf_data = df["Eid"].isin(wbf_df["Eid"])
+    missing = has_wbf_data & df["wbf"].isna()
+    if missing.any():
+        raise ValueError(f"{missing.sum()} streamlines have no flag in wells with WBF data")
+
+    df["v_cds"] = df["v_cds"].astype(float)
+    weights = df["v_cds"].to_numpy()
+    if not np.isfinite(weights).all() or (weights < 0).any():
+        raise ValueError("v_cds must contain finite, nonnegative weights")
+
+    df["wbf_weight"] = df["v_cds"].where(df["wbf"].eq(True), 0.0)
+    totals = df.groupby("Eid", as_index=False)[["v_cds", "wbf_weight"]].sum()
+    totals["wbf_prc"] = 100 * totals["wbf_weight"] / totals["v_cds"].where(
+        totals["v_cds"] > 0
+    )
+    totals.loc[~totals["Eid"].isin(wbf_df["Eid"]), "wbf_prc"] = 0.0
+
+    return totals[["Eid", "wbf_prc"]]
